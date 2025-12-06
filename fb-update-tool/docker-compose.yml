@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  firebird:
+    image: jacobalberty/firebird:2.5-sc
+    container_name: fb25_dev
+    environment:
+      - ISC_PASSWORD=masterkey
+    ports:
+      - "3050:3050"
+    volumes:
+      # Persistência do banco para não perder dados ao reiniciar
+      - ./docker-data:/firebird/data
+    restart: unless-stopped
