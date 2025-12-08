@@ -23,7 +23,7 @@ public class FirebirdErrorTranslator {
             case 335544665:
                 case -803:
                     return new FriendlyError(
-                            "Dados  Duplicados",
+                            "Dados Duplicados",
                             "Tentativa de inserir um registro que já existe (Violação de Chave primária/Única).",
                             ex.getMessage()
                     );
@@ -33,6 +33,22 @@ public class FirebirdErrorTranslator {
                 return new FriendlyError(
                         "Erro de Sintaxe SQL",
                         "Há um erro de escrita no comando(Vírgula faltando, nome errado, etc).",
+                        ex.getMessage()
+                );
+
+            case 335544351:
+            case -607:
+                // Verifica se a mensagem diz que já existe
+                if (msg.contains("exists") || msg.contains("exist")) {
+                    return new FriendlyError(
+                            "Objeto Já Existe",
+                            "Tentativa de criar uma tabela ou objeto que já está no banco.",
+                            ex.getMessage()
+                    );
+                }
+                return new FriendlyError(
+                        "Erro de Metadados",
+                        "Falha ao atualizar estrutura (objeto em uso ou inválido).",
                         ex.getMessage()
                 );
             default:
