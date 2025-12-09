@@ -4,6 +4,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.Charset;
+import java.nio.charset.MalformedInputException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,56 +23,59 @@ public class ScriptParser {
     private static final Pattern SET_TERM_PATTERN = Pattern.compile("SET\\s+TERM\\s+(\\S+)", Pattern.CASE_INSENSITIVE);
 
     /**
-     * Lê o arquivo, aplica correção automática de SET TERM se necessário e retorna os comandos.
+     * Lê o arquivo com estratégia de Fallback de Encoding e aplica correções.
      */
     public List<String> parse(Path filePath) throws IOException {
         logger.info("Lendo script: {}", filePath.getFileName());
 
-        // Lê o conteúdo bruto do arquivo
-        String rawContent = Files.readString(filePath, StandardCharsets.UTF_8);
+        // 1. Tenta ler o conteúdo lidando com Encoding (UTF-8 vs ANSI)
+        String rawContent = readFileWithFallback(filePath);
 
-        // --- AUTO-FIX: INJEÇÃO AUTOMÁTICA DE SET TERM ---
+        // 2. Aplica Auto-Fix de SET TERM se necessário
         String contentToProcess = applyAutoFix(rawContent, filePath.getFileName().toString());
 
+        // 3. Quebra em comandos
         return parseContent(contentToProcess);
     }
 
     /**
-     * Verifica se o script precisa de SET TERM e não tem. Se precisar, adiciona.
+     * Tenta ler UTF-8. Se falhar (arquivo legado), tenta ISO-8859-1 (compatível com WIN1252).
      */
+    private String readFileWithFallback(Path path) throws IOException {
+        try {
+            // Tentativa 1: Padrão Moderno (UTF-8)
+            return Files.readString(path, StandardCharsets.UTF_8);
+        } catch (MalformedInputException | UncheckedIOException e) {
+            // Tentativa 2: Padrão Legado (Windows/Ansi)
+            logger.warn("Encoding UTF-8 falhou. Tentando ISO-8859-1 (Legado) para o arquivo: {}", path.getFileName());
+            // ISO-8859-1 lê 1 byte por caractere, então nunca dá erro de input inválido
+            return Files.readString(path, Charset.forName("ISO-8859-1"));
+        }
+    }
+
     private String applyAutoFix(String content, String fileName) {
         String upper = content.toUpperCase();
 
-        // 1. Se já tem SET TERM, respeitamos o arquivo original
         if (upper.contains("SET TERM")) {
             return content;
         }
 
-        // 2. Verifica se é um objeto complexo que EXIGE Set Term (Trigger, Procedure, Execute Block)
-        // Regex simplificado: Procura por CREATE/RECREATE/ALTER seguido de TRIGGER ou PROCEDURE
         boolean needsFix = (upper.contains("TRIGGER") || upper.contains("PROCEDURE") || upper.contains("EXECUTE BLOCK")) &&
                 (upper.contains("CREATE") || upper.contains("ALTER") || upper.contains("RECREATE") || upper.contains("AS"));
 
         if (needsFix) {
-            logger.info("⚡ Auto-Fix: Adicionando 'SET TERM ^' virtualmente em {}", fileName);
-
-            // Envelopa o conteúdo original.
-            // Adiciona o cabeçalho e o rodapé necessários para o Firebird entender o bloco.
+            logger.info("Auto-Fix: Adicionando 'SET TERM ^' virtualmente em {}", fileName);
             return "SET TERM ^ ;\n" + content + "\n^\nSET TERM ; ^";
         }
 
-        // Se for script simples (CREATE TABLE, INSERT), retorna como está
         return content;
     }
 
-    /**
-     * Lógica "State Machine" para quebrar os comandos
-     */
     public List<String> parseContent(String content) {
         String cleanContent = removeComments(content);
 
         List<String> commands = new ArrayList<>();
-        String delimiter = ";"; // Delimitador padrão
+        String delimiter = ";";
         StringBuilder currentCommand = new StringBuilder();
 
         String[] lines = cleanContent.split("\\r?\\n");
@@ -79,7 +85,6 @@ public class ScriptParser {
 
             if (trimmedLine.isEmpty()) continue;
 
-            // Detecta SET TERM
             Matcher matcher = SET_TERM_PATTERN.matcher(trimmedLine);
             if (matcher.find()) {
                 delimiter = matcher.group(1);
@@ -88,14 +93,11 @@ public class ScriptParser {
                 continue;
             }
 
-            // Acumula a linha
             currentCommand.append(line).append("\n");
 
-            // Verifica se o comando terminou
             if (trimmedLine.endsWith(delimiter)) {
                 String cmdSql = currentCommand.toString().trim();
 
-                // Remove o delimitador do final para o JDBC aceitar
                 if (cmdSql.endsWith(delimiter)) {
                     cmdSql = cmdSql.substring(0, cmdSql.length() - delimiter.length()).trim();
                 }

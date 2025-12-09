@@ -25,11 +25,21 @@ public class ScriptExecutor {
     private final DatabaseChangeTracker tracker;
     private final FirebirdErrorTranslator errorTranslator;
 
-    public ScriptExecutor() {
+    // O "Rádio" para pedir permissão ao usuário (Callback)
+    private final SecurityCallback securityCallback;
+
+    // CONSTRUTOR PRINCIPAL (Com Segurança)
+    public ScriptExecutor(SecurityCallback securityCallback) {
         this.parser = new ScriptParser();
         this.historyService = new HistoryService();
         this.tracker = new DatabaseChangeTracker();
         this.errorTranslator = new FirebirdErrorTranslator();
+        this.securityCallback = securityCallback;
+    }
+
+    // CONSTRUTOR PADRÃO (Segurança Máxima: Se não passar callback, bloqueia tudo)
+    public ScriptExecutor() {
+        this(command -> false);
     }
 
     public DatabaseChangeTracker getTracker() { return tracker; }
@@ -38,13 +48,12 @@ public class ScriptExecutor {
         String fileName = scriptPath.getFileName().toString();
 
         try {
-            // Verifica histórico (mas não bloqueia, permite reprocessar para Smart Merge)
-            boolean jaRodou = historyService.isScriptExecuted(conn, fileName);
-            if (jaRodou) {
-                logger.info("ℹ️ Script {} consta no histórico, mas será reavaliado.", fileName);
+            // Verifica histórico apenas para logar, mas NÃO PARA a execução (para permitir Smart Merge)
+            if (historyService.isScriptExecuted(conn, fileName)) {
+                logger.info("Script {} consta no histórico, mas será reavaliado.", fileName);
             }
 
-            logger.info("Executing script {}", fileName);
+            logger.info("Processando script: {}", fileName);
             List<String> commands = parser.parse(scriptPath);
 
             if (commands.isEmpty()) {
@@ -55,17 +64,21 @@ public class ScriptExecutor {
             boolean success = executeCommandByCommand(conn, commands, fileName);
 
             if (success) {
-                if (!jaRodou) {
-                    historyService.markAsExecuted(conn, fileName);
-                }
-                logger.info("Script {} executed/verified", fileName);
+                try {
+                    // Grava no histórico se ainda não existir
+                    if (!historyService.isScriptExecuted(conn, fileName)) {
+                        historyService.markAsExecuted(conn, fileName);
+                    }
+                } catch (Exception e) { /* Ignora erro de histórico duplicado */ }
+
+                logger.info("Script {} finalizado.", fileName);
                 return true;
             } else {
-                logger.error("Error executing script {}", fileName);
+                logger.error("Erro ao executar script {}", fileName);
                 return false;
             }
         } catch (Exception e) {
-            logger.error("Error executing script {}", fileName, e);
+            logger.error("Erro crítico em {}", fileName, e);
             return false;
         }
     }
@@ -73,32 +86,55 @@ public class ScriptExecutor {
     private boolean executeCommandByCommand(Connection conn, List<String> commands, String fileName) {
         for (String cmd : commands) {
 
-            // --- CORREÇÃO: IGNORAR COMANDOS DE TRANSAÇÃO EXPLÍCITOS ---
-            // O JDBC gerencia a transação. Se mandarmos COMMIT manual, dá erro de handle.
+            // --- 1. FILTRO DE TRANSAÇÃO (JDBC já faz isso) ---
             if (isTransactionControl(cmd)) {
-                logger.info("ℹ️ Controle de Transação JDBC: Ignorando comando '{}'", cmd.trim());
+                logger.info("Controle de Transação JDBC: Ignorando comando '{}'", cmd.trim());
                 tracker.track(cmd, fileName, "SKIPPED_JDBC_AUTO");
                 continue;
             }
 
-            // --- LÓGICA SMART MERGE ---
+            // --- 2. FILTRO DE SEGURANÇA (BLACKLIST) ---
+            if (isForbidden(cmd)) {
+                logger.warn("⛔ COMANDO PROIBIDO DETECTADO: {}", cmd.trim());
+                logger.info("Solicitando autorização administrativa...");
+
+                // CHAMA O CALLBACK (Pede a senha na Tela)
+                boolean autorizado = securityCallback.requestAdminPermission(cmd);
+
+                if (autorizado) {
+                    logger.warn("🔓 ACESSO ADMINISTRATIVO CONCEDIDO. Executando comando perigoso...");
+                    tracker.track(cmd, fileName, "ADMIN_OVERRIDE");
+                    // O código continua abaixo para executar o comando
+                } else {
+                    logger.error("🔒 ACESSO NEGADO. Comando bloqueado.");
+                    tracker.track(cmd, fileName, "BLOCKED_SECURITY");
+                    return false; // Para o script imediatamente
+                }
+            }
+
+            // --- 3. LÓGICA SMART MERGE (Para CREATE TABLE) ---
             if (isCreateTable(cmd)) {
                 String tableName = extractTableName(cmd);
                 if (!tableName.isEmpty() && tableExists(conn, tableName)) {
                     boolean mergeSuccess = performSmartMerge(conn, tableName, cmd, fileName);
-                    if (mergeSuccess) {
-                        continue;
-                    }
+                    if (mergeSuccess) continue; // Se resolveu via merge, pula o comando original
                 }
             }
 
+            // --- 4. EXECUÇÃO NO BANCO ---
             try (Statement stmt = conn.createStatement()) {
                 stmt.execute(cmd);
-                tracker.track(cmd, fileName, "SUCCESS");
+
+                if (isForbidden(cmd)) {
+                    tracker.track(cmd, fileName, "SUCCESS_OVERRIDE");
+                } else {
+                    tracker.track(cmd, fileName, "SUCCESS");
+                }
 
             } catch (SQLException e) {
                 FriendlyError friendlyError = errorTranslator.translate(e);
 
+                // Lista de erros que podemos ignorar (Idempotência)
                 boolean isIgnorable =
                         friendlyError.getTitulo().equals("Dados Duplicados") ||
                                 friendlyError.getTitulo().equals("Objeto Já Existe") ||
@@ -107,7 +143,7 @@ public class ScriptExecutor {
                                 e.getMessage().toLowerCase().contains("unsuccessful metadata update");
 
                 if (isIgnorable) {
-                    logger.info("ℹ️ Ignorado: {} (Item já processado anteriormente).", friendlyError.getTitulo());
+                    logger.info("Ignorado: {} (Item já processado).", friendlyError.getTitulo());
                     tracker.track(cmd, fileName, "IGNORED_EXISTING");
                     continue;
                 }
@@ -120,12 +156,20 @@ public class ScriptExecutor {
         return true;
     }
 
-    // --- MÉTODOS AUXILIARES ---
+    // ==================================================================================
+    // MÉTODOS AUXILIARES
+    // ==================================================================================
 
-    // NOVO MÉTODO PARA DETECTAR COMMIT/ROLLBACK
     private boolean isTransactionControl(String sql) {
         String upper = sql.trim().toUpperCase();
         return upper.startsWith("COMMIT") || upper.startsWith("ROLLBACK");
+    }
+
+    private boolean isForbidden(String sql) {
+        String upper = sql.trim().toUpperCase();
+        return upper.startsWith("DROP DATABASE") ||
+                upper.startsWith("CONNECT ") ||
+                upper.startsWith("CREATE DATABASE");
     }
 
     private boolean isCreateTable(String sql) {
@@ -172,7 +216,7 @@ public class ScriptExecutor {
 
                 if (!dbColumns.contains(colName)) {
                     String alterSql = "ALTER TABLE " + tableName + " ADD " + cleanDef;
-                    logger.info("🛠️ [SMART MERGE] Adicionando coluna faltante: {}", colName);
+                    logger.info("[SMART MERGE] Adicionando coluna faltante: {}", colName);
 
                     try (Statement stmt = conn.createStatement()) {
                         stmt.execute(alterSql);
