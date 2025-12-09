@@ -11,15 +11,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Properties;
 
-
-
 public class ConfigurationService {
-
-    private static final Logger logger = LoggerFactory
-            .getLogger(ConfigurationService.class);
+    private static final Logger logger = LoggerFactory.getLogger(ConfigurationService.class);
     private static final String CONFIG_FILE = "app.properties";
+
+    // Nomes das chaves no arquivo de texto
     private static final String KEY_LAST_DB_PATH = "last_db_path";
     private static final String KEY_LAST_SCRIPT_FOLDER = "last_script_folder";
+    private static final String KEY_LAST_DB_PORT = "last_db_port";
 
     private final Properties properties = new Properties();
 
@@ -33,42 +32,54 @@ public class ConfigurationService {
             try (FileInputStream in = new FileInputStream(path.toFile())) {
                 properties.load(in);
             } catch (IOException e) {
-                logger.error("Erro ao carregar configuraçao", e);
+                logger.error("Erro ao carregar configurações", e);
             }
         }
     }
 
-
-    public  void save() {
-        try (FileOutputStream out = new FileOutputStream(CONFIG_FILE)){
+    private void save() {
+        try (FileOutputStream out = new FileOutputStream(CONFIG_FILE)) {
             properties.store(out, "FBUpdateTool Configuration");
-        }catch (IOException e) {
-            logger.error("Erro ao salvar configuraçoes", e);
+        } catch (IOException e) {
+            logger.error("Erro ao salvar configurações", e);
         }
     }
 
-    public void SaveLastPath(String dbPath){
+    // =================================================================================
+    // MÉTODOS DE ACESSO (GETTERS E SETTERS)
+    // =================================================================================
+
+    // --- 1. CAMINHO DO BANCO DE DADOS ---
+
+    public String getLastDbPath() {
+        return properties.getProperty(KEY_LAST_DB_PATH, "");
+    }
+
+    // ESTE ERA O MÉTODO QUE FALTAVA E GEROU O ERRO:
+    public void saveLastDbPath(String dbPath) {
         properties.setProperty(KEY_LAST_DB_PATH, dbPath);
         save();
     }
 
-    public String getLastPath(){
-        return properties.getProperty(KEY_LAST_DB_PATH, "");
+    // --- 2. PASTA DE SCRIPTS ---
+
+    public String getLastScriptFolder() {
+        return properties.getProperty(KEY_LAST_SCRIPT_FOLDER, "");
     }
 
-
-    public void saveLastScriptFolder(String folderPath){
+    public void saveLastScriptFolder(String folderPath) {
         properties.setProperty(KEY_LAST_SCRIPT_FOLDER, folderPath);
         save();
     }
 
-    public String getLastScriptFolder(){
-        return properties.getProperty(KEY_LAST_SCRIPT_FOLDER, "");
+    // --- 3. PORTA DO FIREBIRD ---
+
+    public String getLastDbPort() {
+        return properties.getProperty(KEY_LAST_DB_PORT, "3050"); // Padrão 3050
     }
 
-
-
-    public String getLastDbPath() {
-        return properties.getProperty(KEY_LAST_DB_PATH, "");
+    public void saveLastDbPort(String port) {
+        properties.setProperty(KEY_LAST_DB_PORT, port);
+        save();
     }
 }

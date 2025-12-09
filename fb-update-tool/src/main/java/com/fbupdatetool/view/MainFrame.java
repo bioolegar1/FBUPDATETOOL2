@@ -1,5 +1,6 @@
 package com.fbupdatetool.view;
 
+import com.fbupdatetool.service.ConfigurationService;
 import com.fbupdatetool.service.HistoryService;
 import com.fbupdatetool.service.ScriptExecutor;
 import com.fbupdatetool.service.ScriptFolderManager;
@@ -12,8 +13,9 @@ import javax.swing.*;
 import javax.swing.border.CompoundBorder;
 import javax.swing.border.EmptyBorder;
 import javax.swing.border.LineBorder;
-import javax.swing.border.TitledBorder;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -26,26 +28,34 @@ import java.util.stream.Stream;
 public class MainFrame extends JFrame {
 
     private static final Logger logger = LoggerFactory.getLogger(MainFrame.class);
+    private final ConfigurationService configService;
 
     // Componentes Visuais
     private JTextField txtDbPath;
     private JButton btnUpdate;
+    private JButton btnSelectDb; // Botão novo (Pasta)
     private JTextArea txtLog;
     private JProgressBar progressBar;
     private JLabel lblStatus;
 
-    // Cores Customizadas (Baseadas no tema Dracula/Dark)
+    // Cores e Fontes
     private final Color COLOR_BG_PANEL = new Color(60, 63, 65);
-    private final Color COLOR_ACCENT = new Color(75, 110, 175); // Azul bonito
     private final Font FONT_TITLE = new Font("Segoe UI", Font.BOLD, 22);
     private final Font FONT_NORMAL = new Font("Segoe UI", Font.PLAIN, 14);
     private final Font FONT_MONO = new Font("JetBrains Mono", Font.PLAIN, 12);
 
     public MainFrame() {
+        this.configService = new ConfigurationService(); // Carrega configurações
         initWindow();
         initComponents();
-        TextAreaAppender.setTextArea(txtLog); // Conecta o Log
+        TextAreaAppender.setTextArea(txtLog);
+
+        // Ações dos Botões
         btnUpdate.addActionListener(e -> iniciarProcessoDeAtualizacao());
+        btnSelectDb.addActionListener(e -> escolherBancoDeDados());
+
+        // Verifica se já tem banco configurado ao abrir
+        verificarConfiguracaoInicial();
     }
 
     private void initWindow() {
@@ -53,62 +63,64 @@ public class MainFrame extends JFrame {
         setSize(1000, 750);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLocationRelativeTo(null);
-        // Fundo geral da janela
         getContentPane().setBackground(new Color(45, 45, 45));
     }
 
     private void initComponents() {
-        // Layout Principal com margens generosas (20px)
         JPanel mainPanel = new JPanel(new BorderLayout(15, 15));
         mainPanel.setBorder(new EmptyBorder(20, 20, 20, 20));
         mainPanel.setBackground(new Color(45, 45, 45));
 
-        // --- 1. CABEÇALHO (Header) ---
+        // --- 1. CABEÇALHO ---
         JPanel headerPanel = new JPanel(new BorderLayout());
         headerPanel.setOpaque(false);
-
         JLabel lblTitle = new JLabel("🚀 FBUpdateTool Enterprise");
         lblTitle.setFont(FONT_TITLE);
         lblTitle.setForeground(Color.WHITE);
-
         JLabel lblSubtitle = new JLabel("Atualizador Automático de Banco de Dados Firebird 2.5");
         lblSubtitle.setFont(new Font("Segoe UI", Font.ITALIC, 14));
         lblSubtitle.setForeground(new Color(170, 170, 170));
-
         headerPanel.add(lblTitle, BorderLayout.NORTH);
         headerPanel.add(lblSubtitle, BorderLayout.SOUTH);
-
         mainPanel.add(headerPanel, BorderLayout.NORTH);
 
-        // --- 2. ÁREA CENTRAL (Config + Log) ---
+        // --- 2. ÁREA CENTRAL ---
         JPanel centerContainer = new JPanel(new BorderLayout(0, 15));
         centerContainer.setOpaque(false);
 
-        // 2.1 Painel de Configuração (Box bonito)
-        JPanel configPanel = createRoundedPanel(" Configuração do Ambiente ");
+        // 2.1 Painel de Configuração
+        JPanel configPanel = createRoundedPanel(" Configuração do Banco de Dados ");
         configPanel.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
-        JLabel lblPath = new JLabel("📂 Caminho do Banco (.GDB/.FDB):");
+        JLabel lblPath = new JLabel("📂 Arquivo do Banco (.GDB / .FDB):");
         lblPath.setFont(FONT_NORMAL);
 
-        txtDbPath = new JTextField("TESTE.GDB");
+        // Recupera o último caminho salvo
+        txtDbPath = new JTextField(configService.getLastDbPath());
         txtDbPath.setFont(FONT_NORMAL);
-        txtDbPath.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Ex: CLIENTE.GDB");
+        txtDbPath.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Clique na pasta para selecionar...");
 
-        // Layout do GridBag
-        gbc.gridx = 0; gbc.gridy = 0; gbc.weightx = 0; gbc.insets = new Insets(0, 0, 5, 0); gbc.anchor = GridBagConstraints.WEST;
+        // Botão de Selecionar Arquivo
+        btnSelectDb = new JButton("...");
+        btnSelectDb.setToolTipText("Selecionar arquivo do banco");
+        btnSelectDb.setPreferredSize(new Dimension(40, 30));
+
+        // Layout
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 2; gbc.anchor = GridBagConstraints.WEST; gbc.insets = new Insets(0, 0, 5, 0);
         configPanel.add(lblPath, gbc);
 
-        gbc.gridx = 0; gbc.gridy = 1; gbc.weightx = 1; gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1; gbc.weightx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.insets = new Insets(0, 0, 0, 5);
         configPanel.add(txtDbPath, gbc);
+
+        gbc.gridx = 1; gbc.gridy = 1; gbc.weightx = 0; gbc.fill = GridBagConstraints.NONE; gbc.insets = new Insets(0, 0, 0, 0);
+        configPanel.add(btnSelectDb, gbc);
 
         centerContainer.add(configPanel, BorderLayout.NORTH);
 
-        // 2.2 Painel de Logs (A área preta)
+        // 2.2 Painel de Logs
         JPanel logPanel = new JPanel(new BorderLayout(0, 5));
         logPanel.setOpaque(false);
-
         JLabel lblLogTitle = new JLabel("📜 Auditoria de Execução:");
         lblLogTitle.setFont(new Font("Segoe UI", Font.BOLD, 14));
         lblLogTitle.setForeground(Color.WHITE);
@@ -116,44 +128,37 @@ public class MainFrame extends JFrame {
         txtLog = new JTextArea();
         txtLog.setEditable(false);
         txtLog.setFont(FONT_MONO);
-        txtLog.setBackground(new Color(30, 30, 30)); // Mais escuro que o fundo
+        txtLog.setBackground(new Color(30, 30, 30));
         txtLog.setForeground(new Color(200, 200, 200));
-        txtLog.setMargin(new Insets(10, 10, 10, 10)); // Espaço interno do texto
+        txtLog.setMargin(new Insets(10, 10, 10, 10));
 
         JScrollPane scrollPane = new JScrollPane(txtLog);
-        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60))); // Borda sutil
-
+        scrollPane.setBorder(BorderFactory.createLineBorder(new Color(60, 60, 60)));
         logPanel.add(lblLogTitle, BorderLayout.NORTH);
         logPanel.add(scrollPane, BorderLayout.CENTER);
 
         centerContainer.add(logPanel, BorderLayout.CENTER);
-
         mainPanel.add(centerContainer, BorderLayout.CENTER);
 
-        // --- 3. RODAPÉ (Status e Botão) ---
+        // --- 3. RODAPÉ ---
         JPanel footerPanel = createRoundedPanel("");
         footerPanel.setLayout(new BorderLayout(10, 0));
 
-        // Painel de Status
         JPanel statusPanel = new JPanel(new BorderLayout(0, 5));
         statusPanel.setOpaque(false);
-
         lblStatus = new JLabel("Aguardando início...");
         lblStatus.setFont(new Font("Segoe UI", Font.BOLD, 12));
         lblStatus.setForeground(Color.GRAY);
-
         progressBar = new JProgressBar();
         progressBar.setStringPainted(true);
-        progressBar.setFont(new Font("Segoe UI", Font.BOLD, 12));
         progressBar.setPreferredSize(new Dimension(100, 25));
 
         statusPanel.add(lblStatus, BorderLayout.NORTH);
         statusPanel.add(progressBar, BorderLayout.CENTER);
 
-        // Botão Principal
         btnUpdate = new JButton("▶ Iniciar Atualização");
         btnUpdate.setFont(new Font("Segoe UI", Font.BOLD, 16));
-        btnUpdate.setBackground(new Color(40, 167, 69)); // Verde Sucesso
+        btnUpdate.setBackground(new Color(40, 167, 69));
         btnUpdate.setForeground(Color.WHITE);
         btnUpdate.setFocusPainted(false);
         btnUpdate.setCursor(new Cursor(Cursor.HAND_CURSOR));
@@ -161,34 +166,75 @@ public class MainFrame extends JFrame {
 
         footerPanel.add(statusPanel, BorderLayout.CENTER);
         footerPanel.add(btnUpdate, BorderLayout.EAST);
-
         mainPanel.add(footerPanel, BorderLayout.SOUTH);
 
         add(mainPanel);
     }
 
-    // Helper para criar painéis bonitos com borda
     private JPanel createRoundedPanel(String title) {
         JPanel p = new JPanel();
         p.setBackground(COLOR_BG_PANEL);
         p.setBorder(new CompoundBorder(
-                new LineBorder(new Color(80, 80, 80), 1, true), // Borda externa
-                new EmptyBorder(15, 15, 15, 15) // Espaço interno
+                new LineBorder(new Color(80, 80, 80), 1, true),
+                new EmptyBorder(15, 15, 15, 15)
         ));
         return p;
     }
 
     // =================================================================================
-    // LÓGICA DE EXECUÇÃO (BACKEND INTEGRADO)
+    // LÓGICA DE SELEÇÃO DE ARQUIVO (ISSUE UI-03)
+    // =================================================================================
+
+    private void verificarConfiguracaoInicial() {
+        // Se o campo estiver vazio (nenhum banco salvo), força a escolha
+        if (txtDbPath.getText().trim().isEmpty()) {
+            SwingUtilities.invokeLater(this::escolherBancoDeDados);
+        }
+    }
+
+    private void escolherBancoDeDados() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Selecione o arquivo do Banco de Dados");
+
+        // Filtro para mostrar apenas arquivos de banco
+        FileNameExtensionFilter filter = new FileNameExtensionFilter("Banco Firebird (*.gdb, *.fdb)", "gdb", "fdb");
+        chooser.setFileFilter(filter);
+
+        // Tenta abrir na pasta atual ou última usada
+        chooser.setCurrentDirectory(new File("."));
+
+        int result = chooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = chooser.getSelectedFile();
+            String path = selectedFile.getAbsolutePath();
+
+            // Atualiza a tela e salva na memória
+            txtDbPath.setText(path);
+            configService.saveLastDbPath(path);
+
+            logger.info("Banco de dados selecionado: {}", path);
+        }
+    }
+
+    // =================================================================================
+    // LÓGICA DE EXECUÇÃO
     // =================================================================================
 
     private void iniciarProcessoDeAtualizacao() {
+        String dbPath = txtDbPath.getText().trim();
+        if (dbPath.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Por favor, selecione um arquivo de banco de dados primeiro!", "Atenção", JOptionPane.WARNING_MESSAGE);
+            escolherBancoDeDados(); // Abre o seletor se esqueceu
+            return;
+        }
+
         btnUpdate.setEnabled(false);
+        btnSelectDb.setEnabled(false); // Bloqueia troca durante execução
         txtLog.setText("");
         progressBar.setValue(0);
         progressBar.setIndeterminate(true);
-        lblStatus.setForeground(new Color(80, 200, 255)); // Azul
-        lblStatus.setText("Conectando ao banco de dados...");
+        lblStatus.setForeground(new Color(80, 200, 255));
+        lblStatus.setText("Validando ambiente...");
 
         new Thread(() -> {
             try {
@@ -196,6 +242,7 @@ public class MainFrame extends JFrame {
             } finally {
                 SwingUtilities.invokeLater(() -> {
                     btnUpdate.setEnabled(true);
+                    btnSelectDb.setEnabled(true);
                     progressBar.setIndeterminate(false);
                     progressBar.setValue(100);
                     lblStatus.setText("Processo finalizado.");
@@ -206,44 +253,36 @@ public class MainFrame extends JFrame {
     }
 
     private void executarLogicaBackend() {
-        String nomeBanco = txtDbPath.getText().trim();
-        String url = "jdbc:firebirdsql://localhost:3050//firebird/data/" + nomeBanco + "?encoding=WIN1252";
+        // Pega a porta validada pelo Main
+        String porta = configService.getLastDbPort();
+        String caminhoBanco = txtDbPath.getText().trim();
+
+        // Monta a URL dinamicamente
+        String url = "jdbc:firebirdsql://localhost:" + porta + "/" + caminhoBanco.replace("\\", "/") + "?encoding=WIN1252";
 
         logger.info("========================================");
         logger.info("   INICIANDO CICLO DE ATUALIZAÇÃO       ");
         logger.info("========================================");
-        logger.info("Conectando em: {}", url);
+        logger.info("URL JDBC: {}", url);
 
         try (Connection conn = DriverManager.getConnection(url, "SYSDBA", "masterkey")) {
             new HistoryService().initHistoryTable(conn);
-/*
-            Path pastaScripts = Paths.get("scripts");
-            if (!Files.exists(pastaScripts)) {
-                logger.error("❌ ERRO CRÍTICO: Pasta 'scripts' não encontrada!");
-                return;
-            }
-*/
 
+            // --- LÓGICA DE PASTA INTELIGENTE (UI-01) ---
             final Path[] pastaScriptsRef = {null};
-            try{
+            try {
                 SwingUtilities.invokeAndWait(() -> {
                     ScriptFolderManager folderManager = new ScriptFolderManager(MainFrame.this);
                     pastaScriptsRef[0] = folderManager.resolveScriptPath();
                 });
-            } catch (Exception e) {
-                logger.error("Erro ao resolver pasta de scripts", e);
-                return;
-            }
+            } catch (Exception e) { return; }
 
-            Path pastaScripts =  pastaScriptsRef[0];
-
+            Path pastaScripts = pastaScriptsRef[0];
             if (pastaScripts == null) {
-                logger.warn("Nenhuma pasta selecionada. Operação Cancelada pelo usuário.");
-                JOptionPane.showMessageDialog(this, "Operação cancelada: Pasta de scripts não definida.");
+                logger.warn("Pasta de scripts não selecionada. Abortando.");
                 return;
             }
-
-            logger.info("Lendo scripts da pasta: {}", pastaScripts.toAbsolutePath());
+            // -------------------------------------------
 
             List<Path> scripts;
             try (Stream<Path> s = Files.list(pastaScripts)) {
@@ -253,18 +292,19 @@ public class MainFrame extends JFrame {
             }
 
             if (scripts.isEmpty()) {
-                logger.warn("⚠️ Nenhum script .sql encontrado para executar.");
+                logger.warn("⚠️ Nenhum script .sql encontrado em: {}", pastaScripts);
+                JOptionPane.showMessageDialog(this, "Nenhum arquivo .sql encontrado na pasta selecionada.");
                 return;
             }
 
-            logger.info("Encontrados {} scripts. Preparando motor...", scripts.size());
+            logger.info("Encontrados {} scripts. Executando...", scripts.size());
 
             SwingUtilities.invokeLater(() -> {
                 progressBar.setIndeterminate(false);
                 progressBar.setMaximum(scripts.size());
             });
 
-            // CALLBACK DE SEGURANÇA (A Janela de Senha)
+            // Callback de Segurança (Senha)
             ScriptExecutor executor = new ScriptExecutor(comandoProibido -> {
                 final boolean[] permitido = {false};
                 try {
@@ -272,62 +312,39 @@ public class MainFrame extends JFrame {
                         Toolkit.getDefaultToolkit().beep();
                         String senha = JOptionPane.showInputDialog(
                                 MainFrame.this,
-                                "<html><h3 style='color:red'>⚠️ BLOQUEIO DE SEGURANÇA</h3>" +
-                                        "O sistema interceptou um comando crítico:<br><br>" +
-                                        "<b style='font-size:14px'>" + comandoProibido + "</b><br><br>" +
-                                        "Digite a senha de <b>SUPORTE</b> para autorizar:</html>",
-                                "Autorização Requerida",
-                                JOptionPane.WARNING_MESSAGE
+                                "<html><h3 style='color:red'>⚠️ SEGURANÇA</h3>" +
+                                        "Comando crítico detectado: <b>" + comandoProibido + "</b><br>" +
+                                        "Senha de Admin:</html>",
+                                "Autorização", JOptionPane.WARNING_MESSAGE
                         );
-
-                        if ("suporte#1234".equals(senha)) {
-                            permitido[0] = true;
-                        } else if (senha != null) {
-                            JOptionPane.showMessageDialog(MainFrame.this, "Senha Incorreta!", "Erro", JOptionPane.ERROR_MESSAGE);
-                        }
+                        if ("suporte#1234".equals(senha)) permitido[0] = true;
                     });
-                } catch (Exception e) {
-                    logger.error("Erro na UI de segurança", e);
-                }
+                } catch (Exception e) { logger.error("Erro UI", e); }
                 return permitido[0];
             });
 
             int count = 0;
-            int sucessos = 0;
-            int ignorados = 0;
-
             for (Path script : scripts) {
-                // Atualiza texto de status
                 String scriptName = script.getFileName().toString();
                 SwingUtilities.invokeLater(() -> lblStatus.setText("Processando: " + scriptName));
 
                 boolean ok = executor.executeScript(conn, script);
-
                 if (!ok) {
-                    logger.error("⛔ EXECUÇÃO INTERROMPIDA NO SCRIPT: {}", scriptName);
-                    JOptionPane.showMessageDialog(this,
-                            "Erro fatal no script:\n" + scriptName + "\nVerifique o log.",
-                            "Falha na Execução", JOptionPane.ERROR_MESSAGE);
+                    logger.error("⛔ ERRO NO SCRIPT: {}", scriptName);
+                    JOptionPane.showMessageDialog(this, "Erro ao rodar: " + scriptName, "Falha", JOptionPane.ERROR_MESSAGE);
                     break;
                 }
 
                 count++;
-                final int progresso = count;
-                SwingUtilities.invokeLater(() -> progressBar.setValue(progresso));
-
-                // Pequena pausa estética (opcional, só pra ver a barra andar se for muito rápido)
-                try { Thread.sleep(50); } catch (InterruptedException e) {}
+                final int prog = count;
+                SwingUtilities.invokeLater(() -> progressBar.setValue(prog));
             }
 
-            logger.info("\n--- RESUMO DA OPERAÇÃO ---");
-            logger.info("Total Processado: {}", count);
-            logger.info("Verifique os detalhes acima.");
+            logger.info("\n--- FIM DO PROCESSO ---");
 
         } catch (Exception e) {
-            logger.error("ERRO FATAL DE CONEXÃO: ", e);
-            JOptionPane.showMessageDialog(this,
-                    "Não foi possível conectar ao banco.\nErro: " + e.getMessage(),
-                    "Erro de Conexão", JOptionPane.ERROR_MESSAGE);
+            logger.error("ERRO FATAL: ", e);
+            JOptionPane.showMessageDialog(this, "Erro de Conexão:\n" + e.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
         }
     }
 }

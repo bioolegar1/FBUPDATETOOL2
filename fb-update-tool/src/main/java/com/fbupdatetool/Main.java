@@ -1,96 +1,116 @@
 package com.fbupdatetool;
 
-import com.fbupdatetool.service.HistoryService;
-import com.fbupdatetool.service.ScriptExecutor;
+import com.fbupdatetool.service.*;
 import com.fbupdatetool.view.MainFrame;
 import com.formdev.flatlaf.FlatDarkLaf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.swing.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) {
+        // Configura o tema visual
         try { FlatDarkLaf.setup(); } catch (Exception ignored) {}
-        SwingUtilities.invokeLater(() -> new MainFrame().setVisible(true));
-        // 2. Chama a execução real
-        rodarBackendComScriptsReais();
+
+        SwingUtilities.invokeLater(() -> {
+            // 1. Orquestração de Ambiente (Checa se o Firebird está vivo)
+            if (!validarAmbienteFirebird()) {
+                logger.error("Firebird não detectado ou porta fechada. Encerrando.");
+                System.exit(0);
+            }
+
+            // 2. Se passou, abre a janela
+            logger.info("Ambiente validado. Iniciando Interface Gráfica...");
+            MainFrame frame = new MainFrame();
+            frame.setVisible(true);
+        });
     }
 
-    private static void rodarBackendComScriptsReais() {
-        // --- CONFIGURAÇÃO ---
-        // ATENÇÃO: Troque 'SEU_BANCO.GDB' pelo nome exato do arquivo que você colocou na pasta docker-data
-        String nomeBanco = "TESTE.GDB";
-        String url = "jdbc:firebirdsql://localhost:3050//firebird/data/" + nomeBanco + "?encoding=WIN1252";
+    /**
+     * Detecta processos, decide a porta e verifica se está ouvindo.
+     */
+    private static boolean validarAmbienteFirebird() {
+        FirebirdProcessDetector detector = new FirebirdProcessDetector();
+        ConfigurationService config = new ConfigurationService();
 
-        try (Connection conn = DriverManager.getConnection(url, "SYSDBA", "masterkey")) {
+        // Correção 1: Declarar a variável antes de usar
+        String portaEscolhida = "3050";
 
-            // 1. Inicializa Tabela de Histórico (Obrigatório)
-            new HistoryService().initHistoryTable(conn);
+        int processos = detector.countFirebirdProcesses();
 
-            logger.info("--- INICIANDO PROCESSAMENTO DE SCRIPTS REAIS ---");
-
-            // Instancia o Maestro (seu Backend Completo)
-            ScriptExecutor executor = new ScriptExecutor();
-
-            // Define a pasta onde estão os arquivos
-            Path pastaScripts = Paths.get("scripts");
-
-            // Valida se a pasta existe
-            if (!Files.exists(pastaScripts) || !Files.isDirectory(pastaScripts)) {
-                logger.error(" ERRO: A pasta 'scripts' não foi encontrada na raiz do projeto!");
-                logger.info(">> Crie uma pasta chamada 'scripts' junto ao pom.xml e coloque seus arquivos .sql lá.");
-                return;
-            }
-
-            // 2. Busca e Ordena os arquivos (01, 02, 03...)
-            List<Path> listaDeScripts;
-            try (Stream<Path> stream = Files.list(pastaScripts)) {
-                listaDeScripts = stream
-                        .filter(p -> p.toString().toLowerCase().endsWith(".sql")) // Pega só .sql
-                        .sorted() // Ordena alfabeticamente/numericamente
-                        .collect(Collectors.toList());
-            }
-
-            if (listaDeScripts.isEmpty()) {
-                logger.warn("A pasta 'scripts' está vazia. Nada para fazer.");
-                return;
-            }
-
-            logger.info("Encontrados {} scripts. Iniciando execução sequencial...", listaDeScripts.size());
-
-            // 3. Loop de Execução (Aqui o Maestro trabalha)
-            for (Path script : listaDeScripts) {
-                logger.info("------------------------------------------------");
-                // Chama o seu ScriptExecutor (que tem Parser, Tradutor e Tracker embutidos)
-                boolean sucesso = executor.executeScript(conn, script);
-
-                if (!sucesso) {
-                    logger.error("⛔ PARE! Ocorreu um erro fatal no script: {}", script.getFileName());
-                    logger.error("Corrija o arquivo antes de continuar.");
-                    break; // Para o loop imediatamente para não quebrar o banco
-                }
-            }
-
-            // 4. Relatório Final (Auditoria)
-            logger.info("================================================");
-            logger.info("\n--- RELATÓRIO DE MUDANÇAS (AUDITORIA) ---");
-            executor.getTracker().getChanges().forEach(change -> {
-                logger.info(change.toString());
-            });
-
-        } catch (Exception e) {
-            logger.error("Erro fatal durante a execução", e);
+        if (processos == 0) {
+            // Correção 6: Nome do método corrigido
+            return mostrarErroFirebirdAusente();
         }
+        else if (processos > 1) {
+            // Correção 2: Tratamento seguro do input (evita NullPointerException)
+            Object inputObj = JOptionPane.showInputDialog(null,
+                    "Detectamos múltiplas instâncias do Firebird rodando.\n" +
+                            "Qual porta você deseja utilizar para conexão?",
+                    "Múltiplos serviços detectados",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null, null, config.getLastDbPort());
+
+            if (inputObj == null || inputObj.toString().trim().isEmpty()) {
+                return false; // Usuário cancelou
+            }
+            portaEscolhida = inputObj.toString().trim();
+        }
+        else {
+            // Se tem 1 processo, usa a última porta salva ou a padrão
+            portaEscolhida = config.getLastDbPort();
+        }
+
+        // Teste da porta se ela esta ouvindo (Socket)
+        // Correção de lógica: garante que portaEscolhida tem valor
+        try {
+            if (!DatabaseService.checkFirebirdService(Integer.parseInt(portaEscolhida))) {
+                int tentativa = JOptionPane.showConfirmDialog(null,
+                        "O serviço do Firebird foi detectado no Windows, mas a porta [" + portaEscolhida + "] está fechada.\n" +
+                                "Deseja tentar outra porta?",
+                        "Porta Inacessível",
+                        JOptionPane.YES_NO_OPTION);
+
+                if (tentativa == JOptionPane.YES_OPTION) {
+                    config.saveLastDbPort("3050"); // Reseta para tentar o padrão
+                    return validarAmbienteFirebird(); // Tenta de novo (Recursão)
+                }
+                return false;
+            }
+        } catch (NumberFormatException e) {
+            JOptionPane.showMessageDialog(null, "A porta digitada não é um número válido.");
+            return validarAmbienteFirebird();
+        }
+
+        // Sucesso: Salva a porta validada
+        config.saveLastDbPort(portaEscolhida);
+        return true;
     }
+
+    private static boolean mostrarErroFirebirdAusente() {
+        // Correção 6: Typos corrigidos (optipons -> options)
+        Object[] options = {"Tentar Novamente", "Sair"};
+
+        int escolha = JOptionPane.showOptionDialog(null,
+                // Correção 5: HTML corrigido (<b style...>) e typos de texto (services.msc)
+                "<html><b style='color:red'>ERRO CRÍTICO: Firebird não encontrado!</b><br>" +
+                        "O sistema não detectou nenhum processo 'fbserver.exe' rodando.<br><br>" +
+                        "1. Verifique se o Firebird está instalado.<br>" +
+                        "2. Inicie o serviço no Windows (services.msc).</html>",
+                "Serviço Parado", // Correção: Prado -> Parado
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.ERROR_MESSAGE,
+                null,
+                options,
+                options[0]);
+
+        if (escolha == 0) return validarAmbienteFirebird(); // Tenta de novo
+        return false;
+    }
+
+    // Correção 3 e 4: REMOVIDO o método 'rodarBackendComScriptsReais'.
+    // Ele não serve mais para nada, pois a lógica de execução agora pertence ao MainFrame.
 }
