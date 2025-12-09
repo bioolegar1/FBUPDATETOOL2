@@ -2,6 +2,7 @@ package com.fbupdatetool.view;
 
 import com.fbupdatetool.service.HistoryService;
 import com.fbupdatetool.service.ScriptExecutor;
+import com.fbupdatetool.service.ScriptFolderManager;
 import com.fbupdatetool.util.TextAreaAppender;
 import com.formdev.flatlaf.FlatClientProperties;
 import org.slf4j.Logger;
@@ -215,12 +216,34 @@ public class MainFrame extends JFrame {
 
         try (Connection conn = DriverManager.getConnection(url, "SYSDBA", "masterkey")) {
             new HistoryService().initHistoryTable(conn);
-
+/*
             Path pastaScripts = Paths.get("scripts");
             if (!Files.exists(pastaScripts)) {
                 logger.error("❌ ERRO CRÍTICO: Pasta 'scripts' não encontrada!");
                 return;
             }
+*/
+
+            final Path[] pastaScriptsRef = {null};
+            try{
+                SwingUtilities.invokeAndWait(() -> {
+                    ScriptFolderManager folderManager = new ScriptFolderManager(MainFrame.this);
+                    pastaScriptsRef[0] = folderManager.resolveScriptPath();
+                });
+            } catch (Exception e) {
+                logger.error("Erro ao resolver pasta de scripts", e);
+                return;
+            }
+
+            Path pastaScripts =  pastaScriptsRef[0];
+
+            if (pastaScripts == null) {
+                logger.warn("Nenhuma pasta selecionada. Operação Cancelada pelo usuário.");
+                JOptionPane.showMessageDialog(this, "Operação cancelada: Pasta de scripts não definida.");
+                return;
+            }
+
+            logger.info("Lendo scripts da pasta: {}", pastaScripts.toAbsolutePath());
 
             List<Path> scripts;
             try (Stream<Path> s = Files.list(pastaScripts)) {

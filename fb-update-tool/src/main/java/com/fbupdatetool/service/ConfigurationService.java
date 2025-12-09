@@ -12,12 +12,14 @@ import java.nio.file.Paths;
 import java.util.Properties;
 
 
+
 public class ConfigurationService {
 
     private static final Logger logger = LoggerFactory
             .getLogger(ConfigurationService.class);
     private static final String CONFIG_FILE = "app.properties";
     private static final String KEY_LAST_DB_PATH = "last_db_path";
+    private static final String KEY_LAST_SCRIPT_FOLDER = "last_script_folder";
 
     private final Properties properties = new Properties();
 
@@ -35,14 +37,36 @@ public class ConfigurationService {
             }
         }
     }
-    public  void saveLastDbPath(String dbPath) {
-        properties.setProperty(KEY_LAST_DB_PATH, dbPath);
+
+
+    public  void save() {
         try (FileOutputStream out = new FileOutputStream(CONFIG_FILE)){
             properties.store(out, "FBUpdateTool Configuration");
         }catch (IOException e) {
             logger.error("Erro ao salvar configuraçoes", e);
         }
     }
+
+    public void SaveLastPath(String dbPath){
+        properties.setProperty(KEY_LAST_DB_PATH, dbPath);
+        save();
+    }
+
+    public String getLastPath(){
+        return properties.getProperty(KEY_LAST_DB_PATH, "");
+    }
+
+
+    public void saveLastScriptFolder(String folderPath){
+        properties.setProperty(KEY_LAST_SCRIPT_FOLDER, folderPath);
+        save();
+    }
+
+    public String getLastScriptFolder(){
+        return properties.getProperty(KEY_LAST_SCRIPT_FOLDER, "");
+    }
+
+
 
     public String getLastDbPath() {
         return properties.getProperty(KEY_LAST_DB_PATH, "");

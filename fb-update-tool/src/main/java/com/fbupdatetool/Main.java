@@ -48,7 +48,7 @@ public class Main {
 
             // Valida se a pasta existe
             if (!Files.exists(pastaScripts) || !Files.isDirectory(pastaScripts)) {
-                logger.error("❌ ERRO: A pasta 'scripts' não foi encontrada na raiz do projeto!");
+                logger.error(" ERRO: A pasta 'scripts' não foi encontrada na raiz do projeto!");
                 logger.info(">> Crie uma pasta chamada 'scripts' junto ao pom.xml e coloque seus arquivos .sql lá.");
                 return;
             }
@@ -63,7 +63,7 @@ public class Main {
             }
 
             if (listaDeScripts.isEmpty()) {
-                logger.warn("⚠️ A pasta 'scripts' está vazia. Nada para fazer.");
+                logger.warn("A pasta 'scripts' está vazia. Nada para fazer.");
                 return;
             }
 
