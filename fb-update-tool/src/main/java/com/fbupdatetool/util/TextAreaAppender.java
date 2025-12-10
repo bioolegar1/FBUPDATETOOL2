@@ -2,42 +2,66 @@ package com.fbupdatetool.util;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
-import javax.swing.*;
-import javax.swing.text.DefaultCaret;
 
-/**
- * REDIRECIONADOR DE LOGS
- * Pega o que o sistema escreve no console e joga para a janelinha do aplicativo.
- */
+import javax.swing.*;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+
 public class TextAreaAppender extends AppenderBase<ILoggingEvent> {
 
     private static JTextArea textArea;
 
-    // O MainFrame chama isso para dizer: "Escreva os logs AQUI"
-    public static void setTextArea(JTextArea textAreaInstance) {
-        textArea = textAreaInstance;
+    // BUFFER: Guarda as mensagens enquanto a janela não abre
+    private static final StringBuilder bufferInicial = new StringBuilder();
 
-        // Truque para o texto rolar para baixo sozinho (Auto-Scroll)
-        if (textArea != null) {
-            DefaultCaret caret = (DefaultCaret) textArea.getCaret();
-            caret.setUpdatePolicy(DefaultCaret.ALWAYS_UPDATE);
+    private final DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
+
+    /**
+     * Conecta a interface ao sistema de Log.
+     * Quando chamado, despeja tudo o que estava guardado no buffer.
+     */
+    public static void setTextArea(JTextArea textArea) {
+        TextAreaAppender.textArea = textArea;
+
+        // Se temos mensagens guardadas do boot, escreve elas agora
+        if (bufferInicial.length() > 0) {
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    textArea.append(bufferInicial.toString());
+                    bufferInicial.setLength(0); // Limpa a memória
+                    textArea.setCaretPosition(textArea.getDocument().getLength());
+                } catch (Exception ignored) {}
+            });
         }
     }
 
     @Override
-    protected void append(ILoggingEvent eventObject) {
-        if (textArea == null) return;
+    protected void append(ILoggingEvent event) {
+        // Formata a mensagem: 15:48:00 [INFO] Mensagem...
+        String timestamp = formatter.format(Instant.ofEpochMilli(event.getTimeStamp()));
+        String nivel = event.getLevel().toString();
+        // Limpa o nome do pacote para ficar mais curto (ex: c.f.service.DatabaseService)
+        String loggerName = event.getLoggerName();
+        String shortLogger = loggerName.substring(loggerName.lastIndexOf('.') + 1);
 
-        // Formata a mensagem: [INFO] Texto...
-        String message = String.format("[%s] %s\n", eventObject.getLevel(), eventObject.getFormattedMessage());
+        String mensagem = event.getFormattedMessage();
+        String textoFinal = String.format("%s [%-5s] %s%n", timestamp, nivel, mensagem);
 
-        // O Swing não deixa outras threads mexerem na tela, então pedimos "por favor" (invokeLater)
-        SwingUtilities.invokeLater(() -> {
-            try {
-                textArea.append(message);
-            } catch (Exception e) {
-                // Ignora erro visual
+        if (textArea == null) {
+            // A janela ainda não abriu? Guarda na memória!
+            synchronized (bufferInicial) {
+                bufferInicial.append(textoFinal);
             }
-        });
+        } else {
+            // A janela já existe? Escreve nela direto.
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    textArea.append(textoFinal);
+                    textArea.setCaretPosition(textArea.getDocument().getLength());
+                } catch (Exception ignored) {}
+            });
+        }
     }
 }

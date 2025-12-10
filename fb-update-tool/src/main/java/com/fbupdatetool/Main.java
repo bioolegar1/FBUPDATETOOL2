@@ -2,27 +2,38 @@ package com.fbupdatetool;
 
 import com.fbupdatetool.service.*;
 import com.fbupdatetool.view.MainFrame;
-import com.formdev.flatlaf.FlatDarkLaf;
+import com.formdev.flatlaf.FlatLightLaf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import java.awt.*;
 
 public class Main {
     private static final Logger logger = LoggerFactory.getLogger(Main.class);
+    private static final int PADDING = 20;
+    private static final int SMALL_PADDING = 10;
 
     public static void main(String[] args) {
-        // Configura o tema visual
-        try { FlatDarkLaf.setup(); } catch (Exception ignored) {}
+        // Configura o tema visual claro
+        try {
+            FlatLightLaf.setup();
+            UIManager.put("Button.arc", 8);
+            UIManager.put("Component.arc", 8);
+            UIManager.put("TextComponent.arc", 8);
+        } catch (Exception e) {
+            logger.warn("Não foi possível configurar o tema FlatLightLaf", e);
+        }
 
         SwingUtilities.invokeLater(() -> {
-            // 1. Orquestração de Ambiente (Checa se o Firebird está vivo)
+            // Validação do ambiente Firebird
             if (!validarAmbienteFirebird()) {
                 logger.error("Firebird não detectado ou porta fechada. Encerrando.");
                 System.exit(0);
             }
 
-            // 2. Se passou, abre a janela
+            // Inicia a interface gráfica
             logger.info("Ambiente validado. Iniciando Interface Gráfica...");
             MainFrame frame = new MainFrame();
             frame.setVisible(true);
@@ -30,87 +41,198 @@ public class Main {
     }
 
     /**
-     * Detecta processos, decide a porta e verifica se está ouvindo.
+     * Detecta processos do Firebird, decide a porta e verifica se está ouvindo.
      */
     private static boolean validarAmbienteFirebird() {
         FirebirdProcessDetector detector = new FirebirdProcessDetector();
         ConfigurationService config = new ConfigurationService();
 
-        // Correção 1: Declarar a variável antes de usar
         String portaEscolhida = "3050";
-
         int processos = detector.countFirebirdProcesses();
 
         if (processos == 0) {
-            // Correção 6: Nome do método corrigido
             return mostrarErroFirebirdAusente();
         }
         else if (processos > 1) {
-            // Correção 2: Tratamento seguro do input (evita NullPointerException)
-            Object inputObj = JOptionPane.showInputDialog(null,
-                    "Detectamos múltiplas instâncias do Firebird rodando.\n" +
-                            "Qual porta você deseja utilizar para conexão?",
-                    "Múltiplos serviços detectados",
-                    JOptionPane.QUESTION_MESSAGE,
-                    null, null, config.getLastDbPort());
-
-            if (inputObj == null || inputObj.toString().trim().isEmpty()) {
+            portaEscolhida = mostrarDialogoMultiplasInstancias(config);
+            if (portaEscolhida == null) {
                 return false; // Usuário cancelou
             }
-            portaEscolhida = inputObj.toString().trim();
         }
         else {
             // Se tem 1 processo, usa a última porta salva ou a padrão
             portaEscolhida = config.getLastDbPort();
         }
 
-        // Teste da porta se ela esta ouvindo (Socket)
-        // Correção de lógica: garante que portaEscolhida tem valor
-        try {
-            if (!DatabaseService.checkFirebirdService(Integer.parseInt(portaEscolhida))) {
-                int tentativa = JOptionPane.showConfirmDialog(null,
-                        "O serviço do Firebird foi detectado no Windows, mas a porta [" + portaEscolhida + "] está fechada.\n" +
-                                "Deseja tentar outra porta?",
-                        "Porta Inacessível",
-                        JOptionPane.YES_NO_OPTION);
-
-                if (tentativa == JOptionPane.YES_OPTION) {
-                    config.saveLastDbPort("3050"); // Reseta para tentar o padrão
-                    return validarAmbienteFirebird(); // Tenta de novo (Recursão)
-                }
-                return false;
-            }
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(null, "A porta digitada não é um número válido.");
-            return validarAmbienteFirebird();
-        }
-
-        // Sucesso: Salva a porta validada
-        config.saveLastDbPort(portaEscolhida);
-        return true;
+        // Verifica se a porta está acessível
+        return validarPortaFirebird(portaEscolhida, config);
     }
 
-    private static boolean mostrarErroFirebirdAusente() {
-        // Correção 6: Typos corrigidos (optipons -> options)
-        Object[] options = {"Tentar Novamente", "Sair"};
+    /**
+     * Mostra diálogo para seleção de porta quando múltiplas instâncias são detectadas.
+     */
+    private static String mostrarDialogoMultiplasInstancias(ConfigurationService config) {
+        JPanel panel = new JPanel(new BorderLayout(0, SMALL_PADDING));
+        panel.setBorder(new EmptyBorder(PADDING, PADDING, PADDING, PADDING));
 
-        int escolha = JOptionPane.showOptionDialog(null,
-                // Correção 5: HTML corrigido (<b style...>) e typos de texto (services.msc)
-                "<html><b style='color:red'>ERRO CRÍTICO: Firebird não encontrado!</b><br>" +
-                        "O sistema não detectou nenhum processo 'fbserver.exe' rodando.<br><br>" +
-                        "1. Verifique se o Firebird está instalado.<br>" +
-                        "2. Inicie o serviço no Windows (services.msc).</html>",
-                "Serviço Parado", // Correção: Prado -> Parado
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.ERROR_MESSAGE,
+        JLabel mensagem = new JLabel(
+                "<html><div style='width: 350px;'>" +
+                        "<b>Múltiplas instâncias do Firebird detectadas</b><br><br>" +
+                        "Foram encontrados vários processos do Firebird em execução. " +
+                        "Por favor, informe a porta que deseja utilizar para a conexão:" +
+                        "</div></html>"
+        );
+
+        JTextField campoPorta = new JTextField(config.getLastDbPort(), 10);
+        campoPorta.setBorder(BorderFactory.createCompoundBorder(
+                campoPorta.getBorder(),
+                new EmptyBorder(5, 8, 5, 8)
+        ));
+
+        JPanel inputPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        inputPanel.add(new JLabel("Porta: "));
+        inputPanel.add(Box.createHorizontalStrut(SMALL_PADDING));
+        inputPanel.add(campoPorta);
+
+        panel.add(mensagem, BorderLayout.NORTH);
+        panel.add(inputPanel, BorderLayout.CENTER);
+
+        int resultado = JOptionPane.showConfirmDialog(
                 null,
-                options,
-                options[0]);
+                panel,
+                "Seleção de Porta",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
 
-        if (escolha == 0) return validarAmbienteFirebird(); // Tenta de novo
+        if (resultado == JOptionPane.OK_OPTION) {
+            String porta = campoPorta.getText().trim();
+            return porta.isEmpty() ? null : porta;
+        }
+        return null;
+    }
+
+    /**
+     * Valida se a porta do Firebird está acessível.
+     */
+    private static boolean validarPortaFirebird(String porta, ConfigurationService config) {
+        try {
+            int portaNum = Integer.parseInt(porta);
+
+            if (!DatabaseService.checkFirebirdService(portaNum)) {
+                return mostrarErroPortaInacessivel(porta, config);
+            }
+
+            // Sucesso: salva a porta validada
+            config.saveLastDbPort(porta);
+            return true;
+
+        } catch (NumberFormatException e) {
+            mostrarErroPortaInvalida();
+            return validarAmbienteFirebird();
+        }
+    }
+
+    /**
+     * Mostra erro quando a porta está inacessível.
+     */
+    private static boolean mostrarErroPortaInacessivel(String porta, ConfigurationService config) {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(new EmptyBorder(PADDING, PADDING, PADDING, PADDING));
+
+        JLabel mensagem = new JLabel(
+                "<html><div style='width: 380px;'>" +
+                        "<b style='color: #d32f2f;'>Porta Inacessível</b><br><br>" +
+                        "O serviço do Firebird foi detectado no Windows, mas a porta <b>" + porta + "</b> " +
+                        "não está respondendo.<br><br>" +
+                        "Deseja tentar conectar usando a porta padrão <b>3050</b>?" +
+                        "</div></html>"
+        );
+
+        panel.add(mensagem, BorderLayout.CENTER);
+
+        String[] opcoes = {"Tentar Porta 3050", "Cancelar"};
+        int escolha = JOptionPane.showOptionDialog(
+                null,
+                panel,
+                "Erro de Conexão",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                opcoes,
+                opcoes[0]
+        );
+
+        if (escolha == 0) {
+            config.saveLastDbPort("3050");
+            return validarAmbienteFirebird();
+        }
         return false;
     }
 
-    // Correção 3 e 4: REMOVIDO o método 'rodarBackendComScriptsReais'.
-    // Ele não serve mais para nada, pois a lógica de execução agora pertence ao MainFrame.
+    /**
+     * Mostra erro quando o Firebird não está em execução.
+     */
+    private static boolean mostrarErroFirebirdAusente() {
+        JPanel panel = new JPanel(new BorderLayout(0, PADDING));
+        panel.setBorder(new EmptyBorder(PADDING, PADDING, PADDING, PADDING));
+
+        JLabel titulo = new JLabel(
+                "<html><b style='color: #d32f2f; font-size: 13px;'>ERRO CRÍTICO: Firebird não encontrado!</b></html>"
+        );
+
+        JLabel mensagem = new JLabel(
+                "<html><div style='width: 400px;'>" +
+                        "O sistema não detectou nenhum processo <code>fbserver.exe</code> em execução.<br><br>" +
+                        "<b>Possíveis soluções:</b><br>" +
+                        "• Verifique se o Firebird está instalado corretamente<br>" +
+                        "• Inicie o serviço através do Gerenciador de Serviços do Windows (<code>services.msc</code>)<br>" +
+                        "• Certifique-se de que o serviço não está bloqueado pelo firewall" +
+                        "</div></html>"
+        );
+
+        panel.add(titulo, BorderLayout.NORTH);
+        panel.add(mensagem, BorderLayout.CENTER);
+
+        String[] opcoes = {"Tentar Novamente", "Sair"};
+        int escolha = JOptionPane.showOptionDialog(
+                null,
+                panel,
+                "Serviço Não Encontrado",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.ERROR_MESSAGE,
+                null,
+                opcoes,
+                opcoes[0]
+        );
+
+        if (escolha == 0) {
+            return validarAmbienteFirebird();
+        }
+        return false;
+    }
+
+    /**
+     * Mostra erro quando a porta digitada não é válida.
+     */
+    private static void mostrarErroPortaInvalida() {
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.setBorder(new EmptyBorder(PADDING, PADDING, PADDING, PADDING));
+
+        JLabel mensagem = new JLabel(
+                "<html><div style='width: 320px;'>" +
+                        "A porta informada não é um número válido.<br><br>" +
+                        "Por favor, digite apenas números (ex: <b>3050</b>)." +
+                        "</div></html>"
+        );
+
+        panel.add(mensagem, BorderLayout.CENTER);
+
+        JOptionPane.showMessageDialog(
+                null,
+                panel,
+                "Porta Inválida",
+                JOptionPane.ERROR_MESSAGE
+        );
+    }
 }

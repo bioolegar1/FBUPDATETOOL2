@@ -31,6 +31,9 @@ public class ScriptParser {
         // 1. Tenta ler o conteúdo lidando com Encoding (UTF-8 vs ANSI)
         String rawContent = readFileWithFallback(filePath);
 
+        // Remove espaços em branco do início/fim do arquivo inteiro para evitar falsos vazios
+        rawContent = rawContent.trim();
+
         // 2. Aplica Auto-Fix de SET TERM se necessário
         String contentToProcess = applyAutoFix(rawContent, filePath.getFileName().toString());
 
@@ -48,7 +51,6 @@ public class ScriptParser {
         } catch (MalformedInputException | UncheckedIOException e) {
             // Tentativa 2: Padrão Legado (Windows/Ansi)
             logger.warn("Encoding UTF-8 falhou. Tentando ISO-8859-1 (Legado) para o arquivo: {}", path.getFileName());
-            // ISO-8859-1 lê 1 byte por caractere, então nunca dá erro de input inválido
             return Files.readString(path, Charset.forName("ISO-8859-1"));
         }
     }
@@ -95,21 +97,42 @@ public class ScriptParser {
 
             currentCommand.append(line).append("\n");
 
+            // Verifica se o comando terminou (tem o delimitador no final da linha)
             if (trimmedLine.endsWith(delimiter)) {
-                String cmdSql = currentCommand.toString().trim();
-
-                if (cmdSql.endsWith(delimiter)) {
-                    cmdSql = cmdSql.substring(0, cmdSql.length() - delimiter.length()).trim();
-                }
-
-                if (!cmdSql.isEmpty()) {
-                    commands.add(cmdSql);
-                }
-
-                currentCommand.setLength(0);
+                adicionarComandoNaLista(commands, currentCommand, delimiter);
             }
         }
+
+        // --- CORREÇÃO PRINCIPAL AQUI ---
+        // Se o loop terminou e ainda tem coisa no buffer (ex: comando sem ; no final)
+        // Adicionamos ele como um comando válido.
+        if (currentCommand.length() > 0) {
+            String resto = currentCommand.toString().trim();
+            if (!resto.isEmpty()) {
+                // Se por acaso o delimitador estiver lá mas o 'endsWith' falhou por espaço, removemos agora
+                if (resto.endsWith(delimiter)) {
+                    resto = resto.substring(0, resto.length() - delimiter.length()).trim();
+                }
+                commands.add(resto);
+            }
+        }
+
         return commands;
+    }
+
+    // Método auxiliar para evitar duplicação de código
+    private void adicionarComandoNaLista(List<String> commands, StringBuilder currentCommand, String delimiter) {
+        String cmdSql = currentCommand.toString().trim();
+
+        if (cmdSql.endsWith(delimiter)) {
+            cmdSql = cmdSql.substring(0, cmdSql.length() - delimiter.length()).trim();
+        }
+
+        if (!cmdSql.isEmpty()) {
+            commands.add(cmdSql);
+        }
+
+        currentCommand.setLength(0); // Limpa o buffer
     }
 
     private String removeComments(String text) {
