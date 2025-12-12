@@ -1,7 +1,9 @@
 package com.fbupdatetool;
 
-import com.fbupdatetool.service.*;
-import com.fbupdatetool.view.MainFrame;
+import com.fbupdatetool.service.ConfigurationService;
+import com.fbupdatetool.service.DatabaseService;
+import com.fbupdatetool.service.FirebirdProcessDetector;
+import com.fbupdatetool.view.MainApp; // Sua classe JavaFX
 import com.formdev.flatlaf.FlatLightLaf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +18,7 @@ public class Main {
     private static final int SMALL_PADDING = 10;
 
     public static void main(String[] args) {
-        // Configura o tema visual claro
+        // 1. Configura o tema visual (FlatLaf) APENAS para os diálogos iniciais em Swing
         try {
             FlatLightLaf.setup();
             UIManager.put("Button.arc", 8);
@@ -26,18 +28,22 @@ public class Main {
             logger.warn("Não foi possível configurar o tema FlatLightLaf", e);
         }
 
-        SwingUtilities.invokeLater(() -> {
-            // Validação do ambiente Firebird
-            if (!validarAmbienteFirebird()) {
-                logger.error("Firebird não detectado ou porta fechada. Encerrando.");
-                System.exit(0);
-            }
+        // 2. Validação do ambiente Firebird (Swing)
+        // Usamos Swing aqui porque o JavaFX ainda não iniciou
+        if (!validarAmbienteFirebird()) {
+            logger.error("Firebird não detectado ou porta fechada. Encerrando.");
+            System.exit(0);
+        }
 
-            // Inicia a interface gráfica
-            logger.info("Ambiente validado. Iniciando Interface Gráfica...");
-            MainFrame frame = new MainFrame();
-            frame.setVisible(true);
-        });
+        // 3. Inicia a Aplicação Principal em JavaFX
+        logger.info("Ambiente validado. Iniciando Interface JavaFX...");
+
+        try {
+            // Chama o lançador do JavaFX
+            MainApp.main(args);
+        } catch (Exception e) {
+            logger.error("Erro ao iniciar JavaFX", e);
+        }
     }
 
     /**
@@ -52,16 +58,17 @@ public class Main {
 
         if (processos == 0) {
             return mostrarErroFirebirdAusente();
-        }
-        else if (processos > 1) {
+        } else if (processos > 1) {
             portaEscolhida = mostrarDialogoMultiplasInstancias(config);
             if (portaEscolhida == null) {
                 return false; // Usuário cancelou
             }
-        }
-        else {
+        } else {
             // Se tem 1 processo, usa a última porta salva ou a padrão
             portaEscolhida = config.getLastDbPort();
+            if (portaEscolhida == null || portaEscolhida.isEmpty()) {
+                portaEscolhida = "3050";
+            }
         }
 
         // Verifica se a porta está acessível
@@ -84,6 +91,9 @@ public class Main {
         );
 
         JTextField campoPorta = new JTextField(config.getLastDbPort(), 10);
+        // Fallback se estiver vazio
+        if (campoPorta.getText().isEmpty()) campoPorta.setText("3050");
+
         campoPorta.setBorder(BorderFactory.createCompoundBorder(
                 campoPorta.getBorder(),
                 new EmptyBorder(5, 8, 5, 8)
@@ -129,6 +139,7 @@ public class Main {
 
         } catch (NumberFormatException e) {
             mostrarErroPortaInvalida();
+            // Recursividade cuidadosa: tenta validar de novo se o user digitou errado
             return validarAmbienteFirebird();
         }
     }
@@ -163,9 +174,9 @@ public class Main {
                 opcoes[0]
         );
 
-        if (escolha == 0) {
-            config.saveLastDbPort("3050");
-            return validarAmbienteFirebird();
+        if (escolha == 0) { // Tentar 3050
+            // Re-valida recursivamente com a porta fixa 3050
+            return validarPortaFirebird("3050", config);
         }
         return false;
     }
