@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.OutputStream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -13,35 +14,36 @@ public class BackupService {
 
     private static final Logger logger = LoggerFactory.getLogger(BackupService.class);
 
-    public void performBackup(String dbPath, String host, int port, String user, String password) throws Exception {
+    // Método corrigido para aceitar OutputStream e evitar erro de formatação
+    public void performBackup(String dbPath, String host, int port, String user, String password, OutputStream outputStream) throws Exception {
         logger.info("=== INICIANDO ROTINA DE BACKUP ===");
 
-        // 1. Validate File and Folder
+        // 1. Validação de Pasta
         File dbFile = new File(dbPath);
         File pastaDoBanco = dbFile.getAbsoluteFile().getParentFile();
 
+        // Fallback: Se não achar a pasta ou não puder escrever, tenta C:\Temp
         if (pastaDoBanco == null || !pastaDoBanco.exists()) {
-            throw new Exception("Não foi possível identificar a pasta do banco de dados: " + dbPath);
+            pastaDoBanco = new File("C:\\Temp");
+            if(!pastaDoBanco.exists()) pastaDoBanco.mkdirs();
         }
 
-        // 2. Generate Filename (Using concatenation to avoid String.format errors)
+        // 2. Geração do Nome (Sem String.format para evitar erro "Conversion = .")
         String fileName = dbFile.getName();
-        // Remove extension (everything after the last dot)
         int lastDotIndex = fileName.lastIndexOf('.');
-        String nomeBancoSemExtensao = (lastDotIndex == -1) ? fileName : fileName.substring(0, lastDotIndex);
+        String nomeSemExt = (lastDotIndex == -1) ? fileName : fileName.substring(0, lastDotIndex);
 
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmm"));
 
-        // CORRECTION: Replaced String.format with concatenation to prevent "Conversion = '.'" error
-        String backupFileName = nomeBancoSemExtensao + "_backup_" + timestamp + ".gbk";
+        // Concatenação simples e segura
+        String backupFileName = nomeSemExt + "_backup_" + timestamp + ".gbk";
 
         File backupFile = new File(pastaDoBanco, backupFileName);
         String backupPath = backupFile.getAbsolutePath();
 
-        logger.info("Origem: " + dbPath);
-        logger.info("Destino do Backup: " + backupPath);
+        logger.info("Destino: " + backupPath);
 
-        // 3. Execute Backup via Jaybird
+        // 3. Execução via Jaybird
         FBBackupManager backupManager = new FBBackupManager(GDSType.getType("PURE_JAVA"));
 
         try {
@@ -51,24 +53,24 @@ public class BackupService {
             backupManager.setPassword(password);
             backupManager.setDatabase(dbPath);
             backupManager.setBackupPath(backupPath);
-            backupManager.setVerbose(true);
-            backupManager.setLogger(System.out);
 
-            logger.info("Enviando comando de backup ao servidor Firebird...");
+            // Liga o modo verboso e redireciona para a janela (se houver)
+            backupManager.setVerbose(true);
+            if (outputStream != null) {
+                backupManager.setLogger(outputStream);
+            } else {
+                backupManager.setLogger(System.out);
+            }
 
             backupManager.backupDatabase();
 
-            logger.info("Backup concluído com SUCESSO!");
-            logger.info("Arquivo gerado: " + backupFile.getName());
+            logger.info("Backup concluído!");
 
         } catch (Exception e) {
-            logger.error("ERRO AO REALIZAR BACKUP: " + e.getMessage());
-
-            // Cleanup: delete 0-byte file if failed
+            logger.error("ERRO BACKUP: " + e.getMessage());
+            // Apaga arquivo corrompido (0 bytes)
             if (backupFile.exists() && backupFile.length() == 0) {
-                try {
-                    backupFile.delete();
-                } catch (Exception ignored) {}
+                try { backupFile.delete(); } catch (Exception ignored) {}
             }
             throw e;
         }
