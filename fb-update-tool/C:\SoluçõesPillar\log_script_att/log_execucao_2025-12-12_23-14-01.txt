@@ -1,9 +1,0 @@
-=== LOG DE EXECUÇÃO - FB UPDATE TOOL ===
-Data: 2025-12-12_23-14-01
-========================================
-
-23:13:33 [INFO ] === INICIANDO ROTINA DE BACKUP ===
-23:13:33 [INFO ] Destino: /Users/elohim/Documents/Desenvolvimento/FBUPDATETOOL2/fb-update-tool/docker-data/TESTE_backup_20251212_2313.gbk
-23:13:33 [INFO ] >>> Iniciando Backup...
-23:13:33 [ERROR] ❌ ERRO BACKUP: I/O error during "open" operation for file "/Users/elohim/Documents/Desenvolvimento/FBUPDATETOOL2/fb-update-tool/docker-data/TESTE.GDB"; Error while trying to open file; No such file or directory [SQLState:08001, ISC error code:335544344]
-23:13:33 [ERROR] FALHA CRÍTICA NO BACKUP: I/O error during "open" operation for file "/Users/elohim/Documents/Desenvolvimento/FBUPDATETOOL2/fb-update-tool/docker-data/TESTE.GDB"; Error while trying to open file; No such file or directory [SQLState:08001, ISC error code:335544344]

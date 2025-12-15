@@ -1,9 +1,0 @@
-=== LOG DE EXECUÇÃO - FB UPDATE TOOL ===
-Data: 2025-12-12_23-24-40
-========================================
-
-23:24:38 [INFO ] === INICIANDO ROTINA DE BACKUP ===
-23:24:38 [INFO ] Destino: /Users/elohim/Documents/Desenvolvimento/FBUPDATETOOL2/fb-update-tool/C:\Temp/TESTE_backup_20251212_2324.gbk
-23:24:38 [INFO ] >>> Iniciando Backup...
-23:24:38 [ERROR] ERRO BACKUP: cannot open backup file /Users/elohim/Documents/Desenvolvimento/FBUPDATETOOL2/fb-update-tool/C:\Temp/TESTE_backup_20251212_2324.gbk; Exiting before completion due to errors [SQLState:HY000, ISC error code:336330835]
-23:24:38 [ERROR] FALHA CRÍTICA NO BACKUP: cannot open backup file /Users/elohim/Documents/Desenvolvimento/FBUPDATETOOL2/fb-update-tool/C:\Temp/TESTE_backup_20251212_2324.gbk; Exiting before completion due to errors [SQLState:HY000, ISC error code:336330835]

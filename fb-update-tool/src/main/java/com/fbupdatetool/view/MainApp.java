@@ -334,8 +334,9 @@ public class MainApp extends Application {
         }
 
         // Conexão JDBC usa o caminho ajustado
-        String url = String.format("jdbc:firebirdsql://%s:%d/%s?encoding=WIN1252", host, port, finalPath.replace("\\", "/"));
-
+// Adicionamos o parametro explicitamente
+        String url = String.format("jdbc:firebirdsql://%s:%d/%s?encoding=WIN1252&sql_dialect=3",
+                host, port, finalPath.replace("\\", "/"));
         // --- 1. ETAPA DE BACKUP ---
         if (fazerBackup) {
             if (stopRequested) { finalizarProcesso("Interrompido antes do Backup."); return; }
