@@ -7,6 +7,8 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -118,25 +120,38 @@ public class ScriptExecutor {
     public void processDeferredQueue(Connection conn) {
         if (deferredCommands.isEmpty()) return;
         logger.info("=== PROCESSANDO FILA DE DEPENDENCIAS ({} itens) ===", deferredCommands.size());
+
         boolean progress;
         for (int i = 1; i <= 20; i++) {
             if (deferredCommands.isEmpty()) break;
             progress = false;
             Iterator<DeferredCommand> it = deferredCommands.iterator();
+
             while (it.hasNext()) {
                 DeferredCommand def = it.next();
 
-                // Na fila, também passamos pelo fluxo de Sanitização -> Planejamento -> Execução
-                // Mas de forma simplificada, assumindo que se está na fila, é execução direta
-                String sqlLimpo = sanitizer.sanitize(def.sql);
-                if (tentaRodarDireto(conn, sqlLimpo, true)) {
-                    it.remove(); progress = true;
+                // Identifica o tipo do comando adiado
+                ScriptIdentity.ScriptType tipo = identity.identifyCommand(def.sql);
+
+                // Sanitiza com contexto correto
+                String sqlLimpo = sanitizer.sanitize(def.sql, tipo);
+
+                if (tentaRodar(conn, sqlLimpo, def.fileName, true)) {
+                    it.remove();
+                    progress = true;
                 }
             }
-            try { if(!conn.getAutoCommit()) conn.commit(); } catch(Exception e) {}
+
+            try {
+                if(!conn.getAutoCommit()) conn.commit();
+            } catch(Exception e) {}
+
             if (!progress) break;
         }
     }
+
+    // TRECHO ATUALIZADO DO ScriptExecutor.java
+    // Apenas a parte que muda no método executeCommandList
 
     private boolean executeCommandList(Connection conn, List<String> commands, String fileName) {
         int cmdIndex = 0;
@@ -145,7 +160,7 @@ public class ScriptExecutor {
             String cmdRaw = cmd.trim();
             if (cmdRaw.isEmpty()) continue;
 
-            // Filtros de Segurança / Controle (Ainda cabe ao Executor decidir se roda ou não)
+            // Filtros de Segurança / Controle
             if (isConfigurationCommand(cmdRaw)) continue;
             if (isTransactionControl(cmdRaw)) continue;
             if (isForbidden(cmdRaw)) {
@@ -154,28 +169,29 @@ public class ScriptExecutor {
 
             logger.info("  -> Cmd #{}: Analisando...", cmdIndex);
 
-            // PASSO A: Sanitização (Responsabilidade do Sanitizer)
-            String cmdSanitizado = sanitizer.sanitize(cmdRaw);
+            // NOVO: Identifica o tipo do comando ANTES de sanitizar
+            ScriptIdentity.ScriptType tipoComando = identity.identifyCommand(cmdRaw);
+
+            // PASSO A: Sanitização (Agora passa o tipo como contexto)
+            String cmdSanitizado = sanitizer.sanitize(cmdRaw, tipoComando);
 
             // PASSO B: Planejamento (Responsabilidade do Strategy + Introspector)
-            // O Strategy decide: Retorna vazio (Skip), o próprio comando, ou lista de Alters (Smart Merge)
             List<String> comandosReais = strategy.planExecution(conn, cmdSanitizado);
 
             if (comandosReais.isEmpty()) {
-                // Se a lista veio vazia, o Strategy decidiu que não precisa fazer nada (Objeto já existe)
-                // O log detalhado já foi feito dentro do Strategy
                 continue;
             }
 
-            // PASSO C: Execução Real (Responsabilidade do Executor + JDBC)
+            // PASSO C: Execução Real
             for (String sqlReal : comandosReais) {
                 if (!tentaRodar(conn, sqlReal, fileName, false)) {
-                    return false; // Falha interrompe o script
+                    return false;
                 }
             }
         }
         return true;
     }
+
 
     /**
      * Tenta executar um comando SQL no banco e trata erros.
@@ -188,10 +204,12 @@ public class ScriptExecutor {
         } catch (SQLException e) {
             FriendlyError friendly = errorTranslator.translate(e);
             String msg = e.getMessage().toLowerCase();
+            int errorCode = e.getErrorCode();
 
             // 1. Erros Ignoráveis (Duplicidade segura)
             boolean isIgnorable = friendly.getTitulo().equalsIgnoreCase("Dados Duplicados") ||
                     friendly.getTitulo().contains("Objeto Ja Existe") ||
+                    friendly.getTitulo().equalsIgnoreCase("Coluna Já Existe") ||  // Nova condição
                     msg.contains("already exists");
 
             if (isIgnorable) {
@@ -208,7 +226,46 @@ public class ScriptExecutor {
                 return true;
             }
 
-            // 3. Erro Real
+            // 3. Novo: Handle erro de NOT NULL em tabela populada (código -607 / 335544351)
+            if (errorCode == 335544351 && msg.contains("validation error") && msg.contains("not null")) {
+                logger.warn("     [AUTO-FIX] Erro de NOT NULL em tabela populada. Tentando corrigir automaticamente.");
+
+                // Extrai tableName e columnName do SQL (assume ALTER TABLE ADD)
+                String tableName = extractTableNameFromSql(sql);
+                String columnName = extractColumnNameFromSql(sql);
+
+                if (tableName == null || columnName == null) {
+                    logger.error("     [AUTO-FIX] Falha ao extrair tabela/coluna do SQL.");
+                    return false;
+                }
+
+                // Passo 1: Adiciona coluna como NULLABLE
+                String tempSql = sql.replaceAll("(?i)\\s+NOT\\s+NULL", "");
+                if (!tentaRodarDireto(conn, tempSql, false)) {
+                    logger.error("     [AUTO-FIX] Falha ao adicionar coluna como NULLABLE.");
+                    return false;
+                }
+
+                // Passo 2: Seta valor default para NULLs existentes
+                String defaultValue = getDefaultValueForColumn(sql); // Helper para determinar default baseado no tipo
+                String updateSql = String.format("UPDATE %s SET %s = %s WHERE %s IS NULL;", tableName, columnName, defaultValue, columnName);
+                if (!tentaRodarDireto(conn, updateSql, false)) {
+                    logger.error("     [AUTO-FIX] Falha ao atualizar valores NULL.");
+                    return false;
+                }
+
+                // Passo 3: Altera para NOT NULL
+                String setNotNullSql = String.format("ALTER TABLE %s ALTER %s SET NOT NULL;", tableName, columnName);
+                if (!tentaRodarDireto(conn, setNotNullSql, false)) {
+                    logger.error("     [AUTO-FIX] Falha ao setar NOT NULL.");
+                    return false;
+                }
+
+                logger.info("     [AUTO-FIX] Correção aplicada com sucesso.");
+                return true;
+            }
+
+            // 4. Erro Real
             logger.error("     ❌ ERRO FATAL: {}", friendly.toString());
             return false;
         }
@@ -220,7 +277,10 @@ public class ScriptExecutor {
             stmt.execute(sql);
             if(logSuccess) logger.info("     ✅ [FILA] Sucesso.");
             return true;
-        } catch (SQLException e) { return false; }
+        } catch (SQLException e) {
+            logger.error("     ❌ Erro ao executar direto: {}", e.getMessage());
+            return false;
+        }
     }
 
     // --- Helpers de Controle de Fluxo (Mantidos aqui pois são regras de execução) ---
@@ -245,5 +305,50 @@ public class ScriptExecutor {
     // Helper visual para log curto
     private String resumirComando(String cmd) {
         return cmd.length() > 80 ? cmd.substring(0, 80) + "..." : cmd;
+    }
+
+    // Novo helper: Extrai tableName de SQL como ALTER TABLE
+    private String extractTableNameFromSql(String sql) {
+        try {
+            String upper = sql.toUpperCase();
+            int start = upper.indexOf("ALTER TABLE") + 11;
+            String resto = sql.substring(start).trim();
+            int end = resto.indexOf(' ');
+            return resto.substring(0, end).trim();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // Novo helper: Extrai columnName de ALTER TABLE ADD coluna tipo
+    private String extractColumnNameFromSql(String sql) {
+        try {
+            String upper = sql.toUpperCase();
+            int addIdx = upper.indexOf("ADD ");
+            String resto = sql.substring(addIdx + 4).trim();
+            int spaceIdx = resto.indexOf(' ');
+            return resto.substring(0, spaceIdx).trim();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // Novo helper: Determina valor default baseado no tipo da coluna
+    private String getDefaultValueForColumn(String sql) {
+        String upper = sql.toUpperCase();
+        if (upper.contains("INTEGER") || upper.contains("SMALLINT") || upper.contains("BIGINT") ||
+                upper.contains("NUMERIC") || upper.contains("DECIMAL") || upper.contains("DOUBLE") ||
+                upper.contains("FLOAT")) {
+            return "0";
+        } else if (upper.contains("VARCHAR") || upper.contains("CHAR") || upper.contains("BLOB SUB_TYPE TEXT")) {
+            return "''";
+        } else if (upper.contains("DATE") || upper.contains("TIMESTAMP")) {
+            return "'1900-01-01'";
+        } else if (upper.contains("BOOLEAN")) {
+            return "FALSE";
+        } else {
+            logger.warn("Tipo desconhecido. Usando NULL como default (pode falhar).");
+            return "NULL";
+        }
     }
 }

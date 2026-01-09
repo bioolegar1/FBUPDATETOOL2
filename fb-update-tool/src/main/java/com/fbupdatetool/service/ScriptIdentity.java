@@ -34,6 +34,7 @@ public class ScriptIdentity {
         }
         public ScriptType getType() { return type; }
         public String getContentSafe() { return contentSafe; }
+        public boolean requiresSpecialHandling() { return requiresSpecialHandling; }
     }
 
     /**
@@ -59,6 +60,7 @@ public class ScriptIdentity {
 
     /**
      * Analisa um comando individual (para o loop do Executor)
+     * MÉTODO PÚBLICO que estava faltando!
      */
     public ScriptType identifyCommand(String sql) {
         return identifyType(sql.toUpperCase().trim());
@@ -69,16 +71,20 @@ public class ScriptIdentity {
         if (sql.isEmpty()) return ScriptType.UNKNOWN;
 
         // 1. Proibidos / Perigosos
-        if (sql.startsWith("DROP DATABASE") || sql.startsWith("CONNECT") || sql.startsWith("CREATE DATABASE")) return ScriptType.FORBIDDEN;
+        if (sql.startsWith("DROP DATABASE") || sql.startsWith("CONNECT") || sql.startsWith("CREATE DATABASE"))
+            return ScriptType.FORBIDDEN;
 
         // 2. Controle de Transação
-        if (sql.startsWith("COMMIT") || sql.startsWith("ROLLBACK")) return ScriptType.TRANSACTION_CONTROL;
+        if (sql.startsWith("COMMIT") || sql.startsWith("ROLLBACK"))
+            return ScriptType.TRANSACTION_CONTROL;
 
         // 3. Configuração de Sessão
-        if (sql.startsWith("SET SQL") || sql.startsWith("SET NAMES") || sql.startsWith("SET CLIENTLIB")) return ScriptType.CONFIGURATION;
+        if (sql.startsWith("SET SQL") || sql.startsWith("SET NAMES") || sql.startsWith("SET CLIENTLIB"))
+            return ScriptType.CONFIGURATION;
 
         // 4. Blocos Complexos
-        if (sql.startsWith("EXECUTE BLOCK")) return ScriptType.EXECUTE_BLOCK;
+        if (sql.startsWith("EXECUTE BLOCK"))
+            return ScriptType.EXECUTE_BLOCK;
 
         // 5. DDL (Create/Alter)
         if (sql.startsWith("CREATE") || sql.startsWith("ALTER") || sql.startsWith("RECREATE")) {

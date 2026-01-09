@@ -121,7 +121,26 @@ public class ScriptParser {
         }
         currentCommand.setLength(0); // Limpa o buffer para o próximo comando
     }
+    public List<String> extractConstraintsFromCreateTable(String createTableSql) {
+        List<String> constraints = new ArrayList<>();
+        String cleanCmd = createTableSql.replaceAll("/\\*[\\s\\S]*?\\*/", " ").replaceAll("\\s+", " ");
 
+        int start = cleanCmd.indexOf('(');
+        int end = cleanCmd.lastIndexOf(')');
+        if (start == -1 || end == -1) return constraints;
+
+        String body = cleanCmd.substring(start + 1, end);
+        List<String> rawDefinitions = splitSqlDefinitions(body);  // Usa o helper existente
+
+        for (String def : rawDefinitions) {
+            String upper = def.trim().toUpperCase();
+            if (upper.startsWith("CONSTRAINT") || upper.startsWith("PRIMARY KEY") ||
+                    upper.startsWith("FOREIGN KEY") || upper.startsWith("UNIQUE")) {
+                constraints.add(def.trim());
+            }
+        }
+        return constraints;
+    }
     /**
      * Extrai a lista de definições de colunas de um comando CREATE TABLE.
      * Isso remove a responsabilidade de parsing do Executor.
