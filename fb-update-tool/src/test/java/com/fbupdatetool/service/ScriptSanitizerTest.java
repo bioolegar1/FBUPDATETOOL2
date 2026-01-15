@@ -1,48 +1,48 @@
 package com.fbupdatetool.service;
 
-import org.junit.Test;
-import static org.junit.Assert.*;
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
 
-public class ScriptSanitizerTest {
+class ScriptSanitizerTest {
 
     private final ScriptSanitizer sanitizer = new ScriptSanitizer();
 
     @Test
-    public void testNumericCorrection_AplicadoEmTodosOsCasos() {
+    void testNumericCorrection_AplicadoEmTodosOsCasos() {
         String sqlTable = "CREATE TABLE TESTE (PRECO NUMERIC(15,2))";
         String resultado = sanitizer.sanitize(sqlTable, ScriptIdentity.ScriptType.TABLE);
 
-        assertTrue("NUMERIC(15,2) deve virar NUMERIC(18,2) em qualquer contexto",
-                resultado.contains("NUMERIC(18,2)"));
+        assertTrue(resultado.contains("NUMERIC(18,2)"),
+                "NUMERIC(15,2) deve virar NUMERIC(18,2) em qualquer contexto");
     }
 
     @Test
-    public void testNullCast_AplicadoApenasEmView() {
+    void testNullCast_AplicadoApenasEmView() {
         String sqlView = "CREATE VIEW V_TESTE AS SELECT NULL, NOME FROM CLIENTES";
 
         // Quando identifica como VIEW, deve adicionar CAST
         String resultadoView = sanitizer.sanitize(sqlView, ScriptIdentity.ScriptType.VIEW);
-        assertTrue("NULL em VIEW deve receber CAST",
-                resultadoView.contains("CAST(NULL AS VARCHAR(100))"));
+        assertTrue(resultadoView.contains("CAST(NULL AS VARCHAR(100))"),
+                "NULL em VIEW deve receber CAST");
 
-        // Quando identifica como INSERT, NÃO deve alterar
+        // Quando identifica como INSERT, NAO deve alterar
         String sqlInsert = "INSERT INTO TESTE VALUES (1, NULL, 'Nome')";
         String resultadoInsert = sanitizer.sanitize(sqlInsert, ScriptIdentity.ScriptType.INSERT);
-        assertFalse("NULL em INSERT deve permanecer intacto",
-                resultadoInsert.contains("CAST"));
+        assertFalse(resultadoInsert.contains("CAST"),
+                "NULL em INSERT deve permanecer intacto");
 
-        // Quando identifica como UPDATE, NÃO deve alterar
+        // Quando identifica como UPDATE, NAO deve alterar
         String sqlUpdate = "UPDATE CLIENTES SET TELEFONE = NULL WHERE ID = 1";
         String resultadoUpdate = sanitizer.sanitize(sqlUpdate, ScriptIdentity.ScriptType.UPDATE);
-        assertFalse("NULL em UPDATE deve permanecer intacto",
-                resultadoUpdate.contains("CAST"));
+        assertFalse(resultadoUpdate.contains("CAST"),
+                "NULL em UPDATE deve permanecer intacto");
     }
 
     @Test
-    public void testNullCast_VariosContextosEmView() {
-        // Testa diferentes posições de NULL dentro de uma VIEW
+    void testNullCast_VariosContextosEmView() {
+        // Testa diferentes posicoes de NULL dentro de uma VIEW
 
-        // NULL no início
+        // NULL no inicio
         String sql1 = "CREATE VIEW V1 AS SELECT NULL, COL1 FROM TAB1";
         String r1 = sanitizer.sanitize(sql1, ScriptIdentity.ScriptType.VIEW);
         assertTrue(r1.contains("SELECT CAST(NULL AS VARCHAR(100)), COL1"));
@@ -64,43 +64,44 @@ public class ScriptSanitizerTest {
     }
 
     @Test
-    public void testCreateTable_NullNaoDeveSerAlterado() {
+    void testCreateTable_NullNaoDeveSerAlterado() {
         String sql = "CREATE TABLE CLIENTES (ID INT, OBSERVACAO VARCHAR(100) NULL)";
         String resultado = sanitizer.sanitize(sql, ScriptIdentity.ScriptType.TABLE);
 
-        // O NULL de definição de coluna não deve virar CAST
-        assertFalse("NULL em definição de coluna não deve ser alterado",
-                resultado.contains("CAST"));
+        // O NULL de definicao de coluna nao deve virar CAST
+        assertFalse(resultado.contains("CAST"),
+                "NULL em definicao de coluna nao deve ser alterado");
     }
 
     @Test
-    public void testAlterTable_NullNaoDeveSerAlterado() {
+    void testAlterTable_NullNaoDeveSerAlterado() {
         String sql = "ALTER TABLE CLIENTES ADD CAMPO_NOVO VARCHAR(50) NULL";
         String resultado = sanitizer.sanitize(sql, ScriptIdentity.ScriptType.TABLE);
 
-        assertFalse("NULL em ALTER TABLE não deve ser alterado",
-                resultado.contains("CAST"));
+        assertFalse(resultado.contains("CAST"),
+                "NULL em ALTER TABLE nao deve ser alterado");
     }
 
     @Test
-    public void testTipoDesconhecido_ApenasCorecoesUniversais() {
+    void testTipoDesconhecido_ApenasCorecoesUniversais() {
         String sql = "SELECT NULL, CAMPO FROM TABELA"; // Sem contexto
         String resultado = sanitizer.sanitize(sql); // Sem passar tipo
 
-        // Sem tipo definido, não deve aplicar correção de NULL
-        assertFalse("Sem tipo definido, correção de NULL não deve ser aplicada",
-                resultado.contains("CAST"));
+        // Sem tipo definido, nao deve aplicar correcao de NULL
+        assertFalse(resultado.contains("CAST"),
+                "Sem tipo definido, correcao de NULL nao deve ser aplicada");
     }
 
     @Test
-    public void testMultiplosNulls_EmView() {
+    void testMultiplosNulls_EmView() {
         String sql = "CREATE VIEW V_COMPLETA AS " +
                 "SELECT NULL, NULL, NOME, NULL FROM CLIENTES";
 
         String resultado = sanitizer.sanitize(sql, ScriptIdentity.ScriptType.VIEW);
 
-        // Deve ter 3 CASTs (todos os NULLs que não são parte de string)
+        // Deve ter 3 CASTs (todos os NULLs que nao sao parte de string)
         int count = resultado.split("CAST\\(NULL AS VARCHAR\\(100\\)\\)", -1).length - 1;
-        assertEquals("Deve corrigir todos os 3 NULLs na VIEW", 3, count);
+        assertEquals(3, count,
+                "Deve corrigir todos os 3 NULLs na VIEW");
     }
 }

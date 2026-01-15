@@ -1,6 +1,7 @@
 package com.fbupdatetool;
 
 import com.fbupdatetool.service.*;
+import com.fbupdatetool.util.ChecksumUtil; // Importação necessária para o checksum
 import com.fbupdatetool.util.TextAreaAppender;
 import com.fbupdatetool.view.BackupView;
 import javafx.application.Application;
@@ -32,7 +33,6 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -250,11 +250,6 @@ public class MainApp extends Application {
         new Thread(task).start();
     }
 
-    // =================================================================
-    // CORREÇÃO 1: Checkbox "Marcar Todos" agora afeta TUDO
-    // CORREÇÃO 2: Itens executados NÃO ficam desabilitados
-    // =================================================================
-
     private void configurarRenderizacaoLista() {
         scriptList.setCellFactory(lv -> new ListCell<>() {
             final CheckBox cb = new CheckBox();
@@ -264,13 +259,11 @@ public class MainApp extends Application {
                     cb.setText(item.displayText);
                     cb.setSelected(item.selected);
 
-                    // Se já rodou, fica verde, mas PERMANECE HABILITADO
                     if (item.executed) {
                         cb.setStyle("-fx-text-fill: #2E7D32; -fx-font-weight: bold;");
                     } else {
                         cb.setStyle("-fx-text-fill: black;");
                     }
-                    // cb.setDisable(item.executed);  <-- REMOVIDO!
 
                     cb.setOnAction(e -> item.selected = cb.isSelected());
                     setGraphic(cb);
@@ -279,12 +272,10 @@ public class MainApp extends Application {
         });
     }
 
-    // Método criado para configurar o evento do chkSelectAll corretamente
     private void configurarAcaoMarcarTodos() {
         chkSelectAll.setOnAction(e -> {
             boolean marcar = chkSelectAll.isSelected();
             for(ScriptItem item : scriptList.getItems()) {
-                // Marca TUDO, sem preconceito com quem já rodou
                 item.selected = marcar;
             }
             scriptList.refresh();
@@ -301,15 +292,13 @@ public class MainApp extends Application {
                 Platform.runLater(() -> logToScreen(">> Verificando histórico..."));
 
                 for (ScriptItem item : scriptList.getItems()) {
-                    // --- CORREÇÃO: Calcula o Hash real do arquivo para comparação ---
                     String currentHash = null;
                     try {
-                        currentHash = com.fbupdatetool.util.ChecksumUtil.calculateHash(item.path);
+                        currentHash = ChecksumUtil.calculateHash(item.path);
                     } catch (Exception e) {
-                        // Se der erro ao ler (ex: arquivo aberto), segue como null
+                        // Ignora erro de leitura
                     }
 
-                    // Passa o hash calculado em vez de 'null'
                     boolean jaRodou = historyService.isScriptExecuted(conn, item.path.getFileName().toString(), currentHash);
 
                     if (jaRodou) {
@@ -373,24 +362,40 @@ public class MainApp extends Application {
         a.getButtonTypes().setAll(b3050, new ButtonType("Cancelar", ButtonBar.ButtonData.CANCEL_CLOSE));
         return a.showAndWait().orElse(null) == b3050 && validarPortaFirebird("3050");
     }
+
     private Node criarTelaAtualizador() {
         VBox left = new VBox(10); left.setPadding(new Insets(10));
         HBox head = new HBox(10); head.setAlignment(Pos.CENTER_LEFT);
         Label lbl = new Label("Scripts"); lbl.setFont(Font.font("Segoe UI", FontWeight.BOLD, 14));
+
         Button btnFolder = new Button("Alterar Pasta");
+
+        // --- CORREÇÃO DE SEGURANÇA AQUI ---
         btnFolder.setOnAction(e -> {
-            DirectoryChooser dc = new DirectoryChooser(); String last = configService.getLastScriptFolder();
-            if (last != null) dc.setInitialDirectory(new File(last));
+            DirectoryChooser dc = new DirectoryChooser();
+            String last = configService.getLastScriptFolder();
+
+            // Só define o diretório inicial se ele realmente existir e for uma pasta
+            if (last != null) {
+                File folder = new File(last);
+                if (folder.exists() && folder.isDirectory()) {
+                    dc.setInitialDirectory(folder);
+                }
+            }
+
             File f = dc.showDialog(primaryStage);
-            if (f != null) { atualizarListaDeScripts(f); verificarHistoricoNoBanco(); }
+            if (f != null) {
+                atualizarListaDeScripts(f);
+                verificarHistoricoNoBanco();
+            }
         });
+
         Region r = new Region(); HBox.setHgrow(r, Priority.ALWAYS); head.getChildren().addAll(lbl, r, btnFolder);
         lblPathScripts = new Label("..."); lblPathScripts.setTextFill(Color.GRAY);
         chkSelectAll = new CheckBox("Marcar Todos"); chkSelectAll.setSelected(true);
         scriptList = new ListView<>();
         configurarRenderizacaoLista();
 
-        // Ativa a lógica nova do Marcar Todos
         configurarAcaoMarcarTodos();
 
         VBox.setVgrow(scriptList, Priority.ALWAYS);
@@ -416,6 +421,7 @@ public class MainApp extends Application {
         SplitPane split = new SplitPane(left, right); split.setDividerPositions(0.4);
         return split;
     }
+
     private void configurarLogbackParaGUI() {
         ch.qos.logback.classic.Logger root = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
         root.detachAndStopAllAppenders();
@@ -423,13 +429,22 @@ public class MainApp extends Application {
         appender.setContext(root.getLoggerContext()); appender.setName("GUI"); appender.setTextArea(txtLog); appender.start();
         root.addAppender(appender);
     }
+
     private void carregarConfiguracoesIniciais() {
         String last = configService.getLastScriptFolder();
-        if (last != null && new File(last).exists()) atualizarListaDeScripts(new File(last));
+        // --- CORREÇÃO: Verifica se é um diretório válido antes de carregar ---
+        if (last != null) {
+            File folder = new File(last);
+            if (folder.exists() && folder.isDirectory()) {
+                atualizarListaDeScripts(folder);
+            }
+        }
+
         txtHost.setText("localhost");
         String p = configService.getLastDbPort(); txtPort.setText(p != null ? p : "3050");
         txtUser.setText("SYSDBA"); txtPass.setText("masterkey");
     }
+
     private void atualizarListaDeScripts(File folder) {
         lblPathScripts.setText(folder.getAbsolutePath()); scriptList.getItems().clear();
         try (Stream<Path> paths = Files.list(folder.toPath())) {
